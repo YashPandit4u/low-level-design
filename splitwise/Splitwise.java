@@ -9,9 +9,7 @@ public final class Splitwise {
     static void validId(String id) {
         require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
     }
-    public enum SplitType { EQUAL, EXACT, PERCENTAGE }
-
-    // Internal allocation behavior; callers supply an enum and plain data.
+    // Internal allocation behavior; callers supply a split-type string and plain data.
     interface SplitStrategy {
         Map<String, Long> allocate(long total);
     }
@@ -184,23 +182,23 @@ public final class Splitwise {
         require(group != null, "Unknown group");
         return group;
     }
-    public Expense addExpense(String groupId, String payer, long total, SplitType splitType,
+    public Expense addExpense(String groupId, String payer, long total, String splitType,
                               List<String> participants, List<Long> values) {
         var group = group(groupId);
         validId(payer);
         require(total > 0, "Positive total required");
-        require(splitType != null, "Split type required");
+        require("EQUAL".equals(splitType) || "EXACT".equals(splitType) || "PERCENTAGE".equals(splitType), "Unknown split type");
         require(participants != null, "Participant list required");
         participants = List.copyOf(participants);
         var equal = new EqualSplit(participants); // validates nonempty, unique IDs
         SplitStrategy strategy;
-        if (splitType == SplitType.EQUAL) {
+        if ("EQUAL".equals(splitType)) {
             require(values == null, "Equal splits do not take values");
             strategy = equal;
         } else {
             require(values != null && values.size() == participants.size(), "One value per participant required");
             values = List.copyOf(values);
-            if (splitType == SplitType.EXACT) {
+            if ("EXACT".equals(splitType)) {
                 Map<String, Long> amounts = new HashMap<>();
                 for (int i = 0; i < participants.size(); i++) amounts.put(participants.get(i), values.get(i));
                 strategy = new ExactSplit(amounts);

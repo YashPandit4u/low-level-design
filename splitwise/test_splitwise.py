@@ -5,7 +5,6 @@ from threading import Barrier
 
 from splitwise import (
     Debt, EqualSplit, ExactSplit, Expense, Group, PercentageSplit, SplitwiseService,
-    SplitType,
 )
 
 
@@ -155,19 +154,19 @@ class SplitwiseTests(unittest.TestCase):
     def test_service_split_types_and_rejection_atomicity(self):
         service = SplitwiseService({"trip": ["A", "B", "C"]})
         for mode, values, total, expected in [
-            (SplitType.EQUAL, None, 100, {"A": 34, "B": 33, "C": 33}),
-            (SplitType.EXACT, [0, 100, 0], 100, {"A": 0, "B": 100, "C": 0}),
-            (SplitType.PERCENTAGE, [3333, 3333, 3334], 101, {"A": 34, "B": 33, "C": 34}),
+            ("EQUAL", None, 100, {"A": 34, "B": 33, "C": 33}),
+            ("EXACT", [0, 100, 0], 100, {"A": 0, "B": 100, "C": 0}),
+            ("PERCENTAGE", [3333, 3333, 3334], 101, {"A": 34, "B": 33, "C": 34}),
         ]:
             expense = service.add_expense("trip", "A", total, mode, ["A", "B", "C"], values)
             self.assertEqual(dict(expense.shares), expected)
         before = service.get_balances("trip"), service.get_history("trip")
         for mode, users, values in [
-            ("INVALID", ["B"], None), (SplitType.EQUAL, ["B", "B"], None),
-            (SplitType.EQUAL, ["B"], [100]), (SplitType.EXACT, ["B"], None),
-            (SplitType.EXACT, ["B", "C"], [100]), (SplitType.EXACT, ["B"], [99]),
-            (SplitType.EXACT, ["X"], [100]), (SplitType.PERCENTAGE, ["B"], [9999]),
-            (SplitType.EXACT, ["B"], [True]), (SplitType.EQUAL, [], None),
+            ("INVALID", ["B"], None), ("EQUAL", ["B", "B"], None),
+            ("EQUAL", ["B"], [100]), ("EXACT", ["B"], None),
+            ("EXACT", ["B", "C"], [100]), ("EXACT", ["B"], [99]),
+            ("EXACT", ["X"], [100]), ("PERCENTAGE", ["B"], [9999]),
+            ("EXACT", ["B"], [True]), ("EQUAL", [], None),
         ]:
             with self.assertRaises(ValueError):
                 service.add_expense("trip", "A", 100, mode, users, values)
@@ -176,7 +175,7 @@ class SplitwiseTests(unittest.TestCase):
     def test_service_copies_caller_data(self):
         service = SplitwiseService({"trip": ["A", "B"]})
         users, values = ["B"], [100]
-        expense = service.add_expense("trip", "A", 100, SplitType.EXACT, users, values)
+        expense = service.add_expense("trip", "A", 100, "EXACT", users, values)
         users.clear(); values.clear()
         self.assertEqual(dict(expense.shares), {"B": 100})
         self.assertEqual(service.get_balances("trip"), (Debt("B", "A", 100),))
@@ -191,7 +190,7 @@ class SplitwiseTests(unittest.TestCase):
 
     def test_group_isolation_and_unknown_group(self):
         service = SplitwiseService({"trip": ["A", "B"], "home": ["A", "B"]})
-        service.add_expense("trip", "A", 100, SplitType.EXACT, ["B"], [100])
+        service.add_expense("trip", "A", 100, "EXACT", ["B"], [100])
         self.assertEqual(service.get_balances("home"), ())
         with self.assertRaises(ValueError):
             service.get_balances("missing")

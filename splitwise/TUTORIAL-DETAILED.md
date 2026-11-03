@@ -155,7 +155,7 @@ class SplitwiseService:
 The caller passes a split type and plain data. No request class or strategy object is needed:
 
 ```text
-SplitType = EQUAL | EXACT | PERCENTAGE
+splitType: "EQUAL", "EXACT", or "PERCENTAGE"
 addExpense(groupId, payer, total, splitType, participants, values)
 ```
 
@@ -305,7 +305,7 @@ Why no `settle()` method on Expense? A settlement applies to the current net deb
 Here's the design assembled in one place. Follow an expense from the service down: the service validates the request and selects a strategy, the group asks that strategy for shares, and the group records the resulting debt changes.
 
 ```text
-SplitType = EQUAL | EXACT | PERCENTAGE
+splitType: "EQUAL", "EXACT", or "PERCENTAGE"
 
 SplitwiseService
   groups: Map<GroupId, Group>
@@ -375,13 +375,13 @@ The caller supplies data; the service chooses the calculation:
 Python:
 
 ```python
-service.add_expense("trip", "A", 90000, SplitType.EQUAL, ["A", "B", "C"])
+service.add_expense("trip", "A", 90000, "EQUAL", ["A", "B", "C"])
 ```
 
 Java:
 
 ```java
-service.addExpense("trip", "A", 90000, SplitType.EQUAL, List.of("A", "B", "C"), null);
+service.addExpense("trip", "A", 90000, "EQUAL", List.of("A", "B", "C"), null);
 ```
 
 After validating the split type, participant IDs, and value count, the selection is small:
@@ -389,9 +389,9 @@ After validating the split type, participant IDs, and value count, the selection
 Python:
 
 ```python
-if split_type == SplitType.EQUAL:
+if split_type == "EQUAL":
     strategy = EqualSplit(participants)
-elif split_type == SplitType.EXACT:
+elif split_type == "EXACT":
     strategy = ExactSplit(dict(zip(participants, values)))
 else:  # PERCENTAGE; unknown types were already rejected
     strategy = PercentageSplit(dict(zip(participants, values)))
@@ -402,16 +402,17 @@ Java:
 
 ```java
 SplitStrategy strategy = switch (splitType) {
-    case EQUAL -> new EqualSplit(participants);
-    case EXACT -> new ExactSplit(amountsByUser(participants, values));
-    case PERCENTAGE -> new PercentageSplit(basisPointsByUser(participants, values));
+    case "EQUAL" -> new EqualSplit(participants);
+    case "EXACT" -> new ExactSplit(amountsByUser(participants, values));
+    case "PERCENTAGE" -> new PercentageSplit(basisPointsByUser(participants, values));
+    default -> throw new IllegalArgumentException("Unknown split type");
 };
 return group.addExpense(payer, total, strategy);
 ```
 
 The map helpers pair each participant with their value; percentage values must be between 0 and 10000 before conversion to Java integers. Reject duplicates and length mismatches before making a map, or entries could be overwritten or silently dropped. The complete implementations include these checks.
 
-Group accepts a strategy internally. The public service accepts only the enum, IDs, amounts, and lists. We don't need a factory class or a request-object hierarchy for this.
+Group accepts a strategy internally. The public service accepts a split-type string and plain expense data. We don't need a factory class or a request-object hierarchy for this.
 
 ### SplitStrategy
 
@@ -825,7 +826,7 @@ Before tracing the ledger, call the service with each split type and verify the 
 The group starts empty. A pays ₹900 for A, B, and C.
 
 ```text
-service.addExpense(trip, A, 90000, EQUAL, [A, B, C], null)
+service.addExpense(trip, A, 90000, "EQUAL", [A, B, C], null)
 
 Allocation: A=30000, B=30000, C=30000
 A's own share: no debt

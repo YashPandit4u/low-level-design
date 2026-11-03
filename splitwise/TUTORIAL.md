@@ -390,7 +390,7 @@ Group.addExpense(payer, total, strategy):
     apply each nonpayer share using addDebt
 ```
 
-The service accepts `addExpense(groupId, payer, total, splitType, participants, values)`. `splitType` is an enum: EQUAL, EXACT, or PERCENTAGE. Exact values are paise; percentage values are basis points, in participant order. Equal splits need no values. Reject duplicate participants and mismatched lengths, then select the internal strategy. No request classes are needed.
+The service accepts `addExpense(groupId, payer, total, splitType, participants, values)`. `splitType` is a string: `"EQUAL"`, `"EXACT"`, or `"PERCENTAGE"`. Exact values are paise; percentage values are basis points, in participant order. Equal splits need no values. Reject duplicate participants and mismatched lengths, then select the internal strategy. No request classes are needed.
 
 If exposed over HTTP, authenticate the caller and check group access; membership alone isn't authorization. That transport layer remains outside this exercise.
 

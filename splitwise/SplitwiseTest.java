@@ -16,25 +16,25 @@ public final class SplitwiseTest {
         }
         var service = new Splitwise(Map.of("trip", List.of("A", "B", "C")));
         var users = new ArrayList<>(List.of("A", "B", "C"));
-        check(service.addExpense("trip", "A", 100, Splitwise.SplitType.EQUAL, users, null)
+        check(service.addExpense("trip", "A", 100, "EQUAL", users, null)
                 .shares().equals(Map.of("A", 34L, "B", 33L, "C", 33L)));
         var values = new ArrayList<>(List.of(0L, 100L, 0L));
-        var exact = service.addExpense("trip", "A", 100, Splitwise.SplitType.EXACT, users, values);
+        var exact = service.addExpense("trip", "A", 100, "EXACT", users, values);
         values.clear();
         check(exact.shares().equals(Map.of("A", 0L, "B", 100L, "C", 0L)));
-        check(service.addExpense("trip", "A", 101, Splitwise.SplitType.PERCENTAGE, users,
+        check(service.addExpense("trip", "A", 101, "PERCENTAGE", users,
                 List.of(3333L, 3333L, 3334L)).shares().equals(Map.of("A", 34L, "B", 33L, "C", 34L)));
         var snapshot = service.getHistory("trip");
         var debts = service.getBalances("trip");
         List<Runnable> invalid = List.of(
             () -> service.addExpense("trip", "A", 100, null, users, null),
-            () -> service.addExpense("trip", "A", 100, Splitwise.SplitType.EQUAL, List.of("B", "B"), null),
-            () -> service.addExpense("trip", "A", 100, Splitwise.SplitType.EQUAL, users, List.of(100L)),
-            () -> service.addExpense("trip", "A", 100, Splitwise.SplitType.EXACT, users, null),
-            () -> service.addExpense("trip", "A", 100, Splitwise.SplitType.EXACT, users, List.of(100L)),
-            () -> service.addExpense("trip", "A", 100, Splitwise.SplitType.EXACT, List.of("B"), List.of(99L)),
-            () -> service.addExpense("trip", "A", 100, Splitwise.SplitType.PERCENTAGE, List.of("B"), List.of(9999L)),
-            () -> service.addExpense("missing", "A", 100, Splitwise.SplitType.EQUAL, users, null));
+            () -> service.addExpense("trip", "A", 100, "EQUAL", List.of("B", "B"), null),
+            () -> service.addExpense("trip", "A", 100, "EQUAL", users, List.of(100L)),
+            () -> service.addExpense("trip", "A", 100, "EXACT", users, null),
+            () -> service.addExpense("trip", "A", 100, "EXACT", users, List.of(100L)),
+            () -> service.addExpense("trip", "A", 100, "EXACT", List.of("B"), List.of(99L)),
+            () -> service.addExpense("trip", "A", 100, "PERCENTAGE", List.of("B"), List.of(9999L)),
+            () -> service.addExpense("missing", "A", 100, "EQUAL", users, null));
         for (var action : invalid) {
             try { action.run(); throw new AssertionError("Invalid input accepted"); }
             catch (IllegalArgumentException expected) {

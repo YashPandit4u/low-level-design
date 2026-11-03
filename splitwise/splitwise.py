@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
-from enum import Enum
 from uuid import uuid4
 
 
@@ -16,12 +15,6 @@ def integer(value, minimum=0):
 def user_id(value):
     if not isinstance(value, str) or not value.strip() or not value.isascii():
         raise ValueError("ID must be a nonempty ASCII string")
-
-
-class SplitType(Enum):
-    EQUAL = "EQUAL"
-    EXACT = "EXACT"
-    PERCENTAGE = "PERCENTAGE"
 
 
 class SplitStrategy(Protocol):
@@ -212,13 +205,13 @@ class SplitwiseService:
         group = self._group(group_id)
         user_id(payer)
         integer(total, 1)
-        if not isinstance(split_type, SplitType):
+        if split_type not in ("EQUAL", "EXACT", "PERCENTAGE"):
             raise ValueError("Unknown split type")
         if participants is None or isinstance(participants, (str, bytes)):
             raise ValueError("Participant list required")
         participants = tuple(participants)
         equal = EqualSplit(participants)  # validates nonempty, unique IDs
-        if split_type == SplitType.EQUAL:
+        if split_type == "EQUAL":
             if values is not None:
                 raise ValueError("Equal splits do not take values")
             strategy = equal
@@ -229,7 +222,7 @@ class SplitwiseService:
             if len(values) != len(participants):
                 raise ValueError("One value per participant required")
             details = dict(zip(participants, values))
-            strategy = (ExactSplit(details) if split_type == SplitType.EXACT
+            strategy = (ExactSplit(details) if split_type == "EXACT"
                         else PercentageSplit(details))
         return group.add_expense(payer, total, strategy)
 
