@@ -357,11 +357,7 @@ Debt
   creditor: String                 // user ID of the person owed money
   amount: long                     // positive outstanding amount, in paise
 </code></pre></div>
-<p>These are field definitions, not additional wrapper classes. IDs are strings, not User objects. <code>long</code> means a 64-bit integer in Java; Python uses <code>int</code>. The map becomes <code>Map&lt;String, Long&gt;</code> in Java, since generics require the boxed type.</p>
-<p>For example, an expense paid by A with <code>total = 90000</code> and <code>sharesByUser = {"A": 30000, "B": 30000, "C": 30000}</code> records a ₹900 bill split three ways. Shares include the payer when they participate, may be zero, and must sum to the total.</p>
-<p>All three are immutable. Expense makes a defensive copy of its shares. The Python implementation stores the allocation as an immutable tuple of <code>(user_id, amount)</code> pairs; Java uses an unmodifiable map. Returning an immutable object that contains a mutable map would not be sufficient.</p>
-<p>Why store final amounts instead of just percentages? Because the expense needs an exact, stable allocation. If our rounding policy changes next month, last month's dinner must not quietly shift a paise between friends.</p>
-<p>Why no <code>settle()</code> method on Expense? A settlement applies to the current net debt between two people. That debt may come from several expenses in both directions. Group has that information; one Expense does not.</p>
+<p>All three are immutable; Expense copies its shares and stores final amounts so later rounding changes cannot alter history. Settlement belongs to Group because it reduces the current debt across expenses.</p>
 <h3 id="final-class-design">Final Class Design<a aria-label="Link to Final Class Design" class="heading-anchor" href="#final-class-design">#</a></h3>
 <p>Here's the design assembled in one place. Follow an expense from the service down: the service validates the request and selects a strategy, the group asks that strategy for shares, and the group records the resulting debt changes.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Final Class Design</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>splitType: "EQUAL", "EXACT", or "PERCENTAGE"

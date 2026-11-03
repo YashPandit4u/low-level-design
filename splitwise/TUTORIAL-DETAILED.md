@@ -307,15 +307,7 @@ Debt
   amount: long                     // positive outstanding amount, in paise
 ```
 
-These are field definitions, not additional wrapper classes. IDs are strings, not User objects. `long` means a 64-bit integer in Java; Python uses `int`. The map becomes `Map<String, Long>` in Java, since generics require the boxed type.
-
-For example, an expense paid by A with `total = 90000` and `sharesByUser = {"A": 30000, "B": 30000, "C": 30000}` records a ₹900 bill split three ways. Shares include the payer when they participate, may be zero, and must sum to the total.
-
-All three are immutable. Expense makes a defensive copy of its shares. The Python implementation stores the allocation as an immutable tuple of `(user_id, amount)` pairs; Java uses an unmodifiable map. Returning an immutable object that contains a mutable map would not be sufficient.
-
-Why store final amounts instead of just percentages? Because the expense needs an exact, stable allocation. If our rounding policy changes next month, last month's dinner must not quietly shift a paise between friends.
-
-Why no `settle()` method on Expense? A settlement applies to the current net debt between two people. That debt may come from several expenses in both directions. Group has that information; one Expense does not.
+All three are immutable; Expense copies its shares and stores final amounts so later rounding changes cannot alter history. Settlement belongs to Group because it reduces the current debt across expenses.
 
 ### Final class design
 

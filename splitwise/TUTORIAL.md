@@ -130,8 +130,6 @@ Debt
   amount: long                     // positive outstanding amount, in paise
 ```
 
-IDs are strings, not User objects. Java uses `long` for money and `Map<String, Long>` for shares; Python uses `int` and a mapping from user IDs to amounts. For example, `{"A": 5000, "B": 5000}` splits ₹100 equally. Shares may be zero and must sum to the total.
-
 Treat these as immutable results. Copy the allocation when constructing Expense, and return fresh Debt records when listing balances. Callers should not be able to change group state by editing a returned collection.
 
 Expense doesn't need a `settle()` method. Ben's current debt might combine dinner, breakfast, and several payments. The group knows that combined amount; one expense does not.
