@@ -169,7 +169,7 @@ addExpense(groupId, payer, total, splitType, participants, values)
 
 Reject duplicate participants, unknown split types, and missing or mismatched values. Equal splits reject extra values. The service selects the strategy; the strategy checks the allocation; Group checks membership and updates debts. Collections are copied before use.
 
-### Group and balance representation
+### Group
 
 A group needs its members, history, current balances, and a lock. Before writing those fields down, let's decide what a balance means.
 
@@ -221,7 +221,7 @@ We'll use this representation. It gives us one value to update for either direct
 
 The sign convention is internal. Callers receive `Debt(debtor, creditor, positiveAmount)` so UI code doesn't have to understand it.
 
-### History versus current balances
+**History and current balances.**
 
 We have two representations of related information. Is that a mistake?
 
@@ -416,7 +416,7 @@ Group accepts a strategy internally. The public service accepts a split-type str
 
 All three strategies return the same result: each participant's share in paise. Let's implement their calculations before connecting them to the group ledger.
 
-#### EqualSplit and the missing paise
+**EqualSplit and the missing paise.**
 
 The first version most people write is `total / numberOfPeople`. That works until the division has a remainder.
 
@@ -465,7 +465,7 @@ Map<String, Long> allocate(long total, List<String> participants) {
 
 Do not silently turn a duplicated participant list into a set. If the input contains A twice, that could be a caller bug or an attempted weighting scheme. Our equal-split contract requires unique participants, so reject it.
 
-#### ExactSplit
+**ExactSplit.**
 
 Exact splitting is validation, not an allocation algorithm. The caller already supplied the answer.
 
@@ -498,7 +498,7 @@ The Java version uses checked addition. An overflow must reject the operation in
 
 At the request boundary, reject duplicate user IDs before constructing a map. Once duplicates have overwritten each other in a map, the allocation layer can't recover the original input.
 
-#### PercentageSplit and rounding fairly
+**PercentageSplit and rounding fairly.**
 
 For percentages, independently rounding each result is unsafe. Take 101 paise split 33.33%, 33.33%, and 33.34%. The exact shares are 33.6633, 33.6633, and 33.6734 paise. Rounding each to the nearest paise gives 34 + 34 + 34 = 102. We've charged the group an extra paise.
 
@@ -571,7 +571,7 @@ Notice that a 0% participant gets no fractional remainder and no allocation. The
 
 The group turns allocations into debts and records settlements. Its methods share one sign convention and one lock, so we'll establish those helpers before following the two mutation paths.
 
-#### Translating a share into debt
+**Translating a share into debt.**
 
 Every participant owes their allocated share to the payer, except when the participant is the payer. We need one helper to translate that directed obligation into our canonical key and sign.
 
@@ -599,7 +599,7 @@ Delta debtDelta(String debtor, String creditor, long amount) {
 
 Callers exclude self-debts before using this helper. Keeping the sign conversion in one place prevents expenses and settlements from developing subtly different conventions.
 
-#### Group.addExpense
+**Group.addExpense.**
 
 We now know how to calculate shares. The next job is to accept all of an expense together. If Ben's debt changes but Chen's doesn't, we haven't recorded a smaller expense; we've recorded a broken one.
 
@@ -666,7 +666,7 @@ Why calculate `pending` first? In Java, checked arithmetic can fail. If we updat
 
 Allocation happens outside the lock because it is a pure calculation and membership never changes in this version. Balance updates depend on current state and belong inside. This division keeps the critical section small without weakening correctness.
 
-#### Committing balances and history together
+**Committing balances and history together.**
 
 The `pending` map contains replacement balances, not deltas. For each affected pair, we've already combined the old balance with the new obligation. The remaining work is deliberately mechanical:
 
@@ -697,7 +697,7 @@ private void commit(Map<Pair, Long> pending, Event event) {
 
 No business validation belongs here: a rejection after the first write would leave a partial update. Readers take the same lock, so they cannot observe the interval between updating the pairs and appending history. This is atomic visibility within our process, not crash recovery. Durable all-or-nothing writes need a database transaction, which we'll discuss in the follow-ups.
 
-#### Concurrency tradeoffs
+**Concurrency tradeoffs.**
 
 ##### Bad Solution: Rely on a thread-safe map
 
@@ -722,7 +722,7 @@ An expense may change several pairs and history together. A group lock covers th
 
 Per-pair locks are possible, but a multi-participant expense then needs multiple locks in a stable order, history needs coordinated updates, and readers need consistent snapshots. That's a substantial complexity increase. Start with a group lock; consider finer granularity only when a measured workload justifies it.
 
-#### Group.recordSettlement
+**Group.recordSettlement.**
 
 A settlement is not a negative expense. It has its own rule: there must already be enough debt in the requested direction.
 
@@ -770,7 +770,7 @@ The positive-amount check and `amount <= outstanding` reject absent debts and pa
 
 Creating the event before acquiring the lock doesn't record anything. It's just a local object. If validation fails inside the lock, that object is discarded and history remains unchanged.
 
-#### Reading balances and history
+**Reading balances and history.**
 
 Reads use the same group lock. Otherwise a balance query could see Ben's updated share but Chen's old one halfway through an expense.
 
@@ -778,7 +778,7 @@ For each positive pair balance, return lower ID as debtor; for a negative balanc
 
 The caller can keep or display a snapshot after the lock is released. It may become stale as new expenses arrive, which is normal. It cannot corrupt the group's internal state. Separate calls to `getBalances` and `getHistory` are separate snapshots; if a client needs them from the same instant, expose one combined snapshot method.
 
-#### Complexity
+**Complexity.**
 
 Let `k` be expense participants, `b` the group's nonzero debt pairs, and `h` its history length.
 

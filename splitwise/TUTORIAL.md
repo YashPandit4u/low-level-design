@@ -91,7 +91,7 @@ There's only one splitting rule so far. A private equal-split helper is enough; 
 
 ## Class design
 
-### Group and balance representation
+### Group
 
 Start with the questions the API needs to answer. If Ben wants to settle with Asha, we need to know how much **Ben owes Asha**, not just Ben's total debt across the group.
 
@@ -152,7 +152,7 @@ The Python and Java snippets are pseudocode. `require` rejects invalid input; re
 
 ### Group
 
-#### Split an expense equally
+**Split an expense equally.**
 
 Start with ₹100, represented as 10,000 paise, shared by A, B, and C. Integer division gives each person 3333 paise and leaves one paise. Give that extra paise to the first participant after sorting IDs.
 
@@ -188,7 +188,7 @@ The public method will validate the inputs before calling this helper. Sorting m
 
 A one-paise expense shared by three people produces shares of 1, 0, and 0. Individual shares may be zero even though an expense total must be positive.
 
-#### Net a new obligation
+**Net a new obligation.**
 
 Suppose Ben already owes Asha ₹300. An expense now makes Asha owe Ben ₹100. Before adding a new entry, cancel as much as possible against the reverse debt.
 
@@ -234,7 +234,7 @@ For the example, `cancelled` is ₹100, leaving Ben owing Asha ₹200. If the ne
 
 This helper is private. Its callers supply distinct members and nonnegative amounts, and the map already satisfies the one-direction-per-pair rule. Keeping cancellation here means every expense follows the same rule.
 
-#### Add the expense
+**Add the expense.**
 
 Now the public operation has a short flow: validate, calculate shares, and add each nonpayer's obligation to the payer.
 
@@ -280,7 +280,7 @@ Notice the two separate decisions. Everyone in the participant list gets a share
 
 All input validation happens before the first balance change. Don't validate participants as you update their debts: finding an unknown member halfway through would leave a partially applied expense. Duplicate participants are rejected rather than silently removed.
 
-#### Record a settlement
+**Record a settlement.**
 
 A settlement reduces an existing debt. It must not create a new obligation or flip its direction.
 
@@ -322,7 +322,7 @@ If B owes A ₹150, paying ₹100 leaves ₹50. Paying ₹150 removes the entry.
 
 We deliberately don't call `addDebt(creditor, debtor, amount)` here. That helper permits a direction reversal; settlement expressly forbids one.
 
-#### Read the balances
+**Read the balances.**
 
 `getBalances` returns one fresh `Debt(debtor, creditor, amount)` for every map entry. No signs need interpreting, and no zero entries need filtering. The caller receives a snapshot rather than the mutable map.
 
