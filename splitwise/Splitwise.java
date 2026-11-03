@@ -9,19 +9,9 @@ public final class Splitwise {
     static void validId(String id) {
         require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
     }
-    public sealed interface SplitInput permits EqualSplitInput, ExactSplitInput, PercentageSplitInput {}
-    public record EqualSplitInput(List<String> participants) implements SplitInput {
-        public EqualSplitInput { participants = List.copyOf(participants); }
-    }
-    public record ExactSplitInput(Map<String, Long> amountsByUser) implements SplitInput {
-        public ExactSplitInput { amountsByUser = Map.copyOf(amountsByUser); }
-    }
-    public record PercentageSplitInput(Map<String, Integer> basisPointsByUser) implements SplitInput {
-        public PercentageSplitInput { basisPointsByUser = Map.copyOf(basisPointsByUser); }
-    }
-    public record AddExpenseRequest(String groupId, String payerId, long amount, SplitInput split) {}
+    public enum SplitType { EQUAL, EXACT, PERCENTAGE }
 
-    // Internal domain components; callers submit SplitInput data, not strategies.
+    // Internal allocation behavior; callers supply an enum and plain data.
     interface SplitStrategy {
         Map<String, Long> allocate(long total);
     }
@@ -194,22 +184,37 @@ public final class Splitwise {
         require(group != null, "Unknown group");
         return group;
     }
-    public Expense addExpense(AddExpenseRequest request) {
-        require(request != null, "AddExpenseRequest required");
-        validId(request.groupId());
-        validId(request.payerId());
-        require(request.amount() > 0, "Positive amount required");
-        var group = group(request.groupId());
+    public Expense addExpense(String groupId, String payer, long total, SplitType splitType,
+                              List<String> participants, List<Long> values) {
+        var group = group(groupId);
+        validId(payer);
+        require(total > 0, "Positive total required");
+        require(splitType != null, "Split type required");
+        require(participants != null, "Participant list required");
+        participants = List.copyOf(participants);
+        var equal = new EqualSplit(participants); // validates nonempty, unique IDs
         SplitStrategy strategy;
-        if (request.split() instanceof EqualSplitInput input)
-            strategy = new EqualSplit(input.participants());
-        else if (request.split() instanceof ExactSplitInput input)
-            strategy = new ExactSplit(input.amountsByUser());
-        else if (request.split() instanceof PercentageSplitInput input)
-            strategy = new PercentageSplit(input.basisPointsByUser());
-        else
-            throw new IllegalArgumentException("Unsupported split input");
-        return group.addExpense(request.payerId(), request.amount(), strategy);
+        if (splitType == SplitType.EQUAL) {
+            require(values == null, "Equal splits do not take values");
+            strategy = equal;
+        } else {
+            require(values != null && values.size() == participants.size(), "One value per participant required");
+            values = List.copyOf(values);
+            if (splitType == SplitType.EXACT) {
+                Map<String, Long> amounts = new HashMap<>();
+                for (int i = 0; i < participants.size(); i++) amounts.put(participants.get(i), values.get(i));
+                strategy = new ExactSplit(amounts);
+            } else {
+                Map<String, Integer> weights = new HashMap<>();
+                for (int i = 0; i < participants.size(); i++) {
+                    long value = values.get(i);
+                    require(value >= 0 && value <= 10000, "Invalid basis points");
+                    weights.put(participants.get(i), (int) value);
+                }
+                strategy = new PercentageSplit(weights);
+            }
+        }
+        return group.addExpense(payer, total, strategy);
     }
     public Settlement recordSettlement(String groupId, String debtor, String creditor, long amount) {
         return group(groupId).recordSettlement(debtor, creditor, amount);
