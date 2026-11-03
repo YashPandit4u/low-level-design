@@ -4,9 +4,9 @@
 
 💸 An expense-sharing system records money people spend on behalf of a group and tracks who owes whom. If Asha pays ₹900 for dinner shared equally with Ben and Chen, Ben owes Asha ₹300 and Chen owes Asha ₹300. Asha's own ₹300 share creates no debt.
 
-The interesting part starts when Ben pays for breakfast the next morning, someone chooses an unequal split, and two friends record settlements at the same time. We need the arithmetic and the state transitions to stay correct through all of that.
+The interesting part starts when Ben pays for breakfast the next morning, someone chooses an unequal split, and two friends record settlements at the same time. We need to calculate each share correctly and keep the balances accurate after every operation.
 
-We're designing a scoped, in-memory expense-sharing backend inspired by Splitwise.
+We'll build an expense-sharing service that stores its data in memory.
 
 ## Requirements
 
@@ -22,7 +22,7 @@ That's enough to recognize the product, but it leaves several important decision
 >
 > **Interviewer:** Support multiple groups. Users and group membership are provided at startup. User profiles and membership changes are out of scope.
 
-Good. User identity matters, but we don't need an account-management subsystem. A user ID is enough for this design. The same person can belong to several groups, and balances stay separate between groups.
+We need to identify users, but we don’t need to manage their accounts. A user ID is enough for this design. The same person can belong to several groups, and balances stay separate between groups.
 
 > **You:** Can multiple people pay for one expense, or should we assume one payer?
 >
@@ -52,7 +52,7 @@ That gives us pairwise netting. We aren't allowed to replace “A owes B, B owes
 >
 > **Interviewer:** Record an external payment. Partial settlements are allowed. Reject payments in the wrong direction or above the outstanding debt.
 
-No payment gateway, bank confirmation, or payment-status workflow. The system records the caller's assertion that a payment happened. Authentication and authorization belong at the boundary and are outside this exercise.
+The caller tells us that a payment has already happened. We record it without connecting to a bank or payment gateway.
 
 > **You:** Do we need history, editing, or deletion? And should concurrent updates be safe?
 >
@@ -65,7 +65,7 @@ Concurrency is part of correctness here. Two simultaneous settlements must not b
 1. Support multiple groups with fixed membership configured at startup.
 2. Add an expense with one payer and one or more group participants.
 3. Support equal, exact-amount, and percentage splits.
-4. Represent money in integer paise; every allocation must sum exactly to the total.
+4. Store money as integer paise. The shares must add up to the expense total.
 5. Net opposite debts between each pair of members within a group.
 6. Return current debts as debtor, creditor, and positive amount.
 7. Record partial or complete settlements against an existing directed debt.
@@ -90,9 +90,9 @@ A person's share can be zero: splitting 1 paise among three people gives 1, 0, a
 
 Let's consider the nouns before turning them into classes.
 
-**User.** The identity system is external, and this subsystem only needs membership and IDs. There is no need for a User class containing email addresses, passwords, or payment details. User IDs stay strings.
+**User.** Accounts already exist. We only need user IDs and group membership. There is no need for a User class containing email addresses, passwords, or payment details. User IDs stay strings.
 
-**Group.** A group owns membership, expense history, and balances. It enforces which users can participate and coordinates state changes. This clearly deserves a class.
+**Group.** A group owns membership, expense history, and balances. It checks who can participate and updates debts when expenses or settlements are added.
 
 **Expense.** An expense records who paid, the total, and each participant's final share. Even without business methods, those fields belong together. We also need to retain them after balances have changed. Expense is an immutable record.
 
@@ -100,9 +100,9 @@ Let's consider the nouns before turning them into classes.
 
 **Split.** This word can mean either the rule used to divide an expense or one person's resulting share. We need both concepts, but that doesn't mean both need class hierarchies. A share can be a user ID and an amount. We'll decide how to organize the calculation when we get to class design.
 
-**Balance.** A balance is a changing relationship between two users. We need a representation, but we don't necessarily need a mutable Balance object with its own lifecycle. We'll decide on the data structure during class design. A returned Debt record will keep the public API readable.
+**Balance.** A balance is a changing relationship between two users. We need to store that amount, but a separate Balance class may not be necessary. We'll decide on the data structure during class design. A returned Debt record will keep the public API readable.
 
-**SplitwiseService.** Callers submit expense data and a group ID. This application-level entry point selects a split strategy and routes the operation to that group. It doesn't calculate individual shares or hold every group's lock.
+**SplitwiseService.** Callers submit expense data and a group ID. The service selects a split strategy and calls the requested group. It doesn't calculate individual shares or hold every group's lock.
 
 | Entity | Responsibility |
 | --- | --- |
@@ -163,11 +163,13 @@ addExpense(groupId, payer, total, splitType, participants, values)
 
 | Split type | Values |
 | --- | --- |
-| EQUAL | Omit in Python; pass `null` in Java. |
+| EQUAL | Omit in Python. Pass `null` in Java. |
 | EXACT | Each participant's amount in paise, e.g. `[4000, 6000]`. |
 | PERCENTAGE | Each participant's percentage in basis points, e.g. `[4000, 6000]` means 40% and 60%. |
 
-Reject duplicate participants, unknown split types, and missing or mismatched values. Equal splits reject extra values. The service selects the strategy; the strategy checks the allocation; Group checks membership and updates debts. Collections are copied before use.
+Reject duplicate participants and unknown split types. Exact and percentage splits need one value per participant. Equal splits take no values.
+
+The service chooses the strategy. The strategy calculates and checks the shares. Group checks membership and updates debts. Copy the input lists before using them.
 
 ### Group
 
@@ -182,7 +184,7 @@ Asha: +₹300
 Ben:  -₹300
 ```
 
-Positive means the person should receive money; negative means they owe money. This is compact and useful for debt simplification.
+A positive amount means the person should receive money. A negative amount means they owe money. This is compact and useful for debt simplification.
 
 But it loses who owes whom. Consider two histories:
 
@@ -191,9 +193,9 @@ History 1: A owes B ₹300; B owes C ₹300
 History 2: A owes C ₹300
 ```
 
-Both have the same net positions: A owes ₹300, B is net zero, and C should receive ₹300. Our requirements distinguish those histories because we preserve direct pair relationships. Net positions alone cannot answer which settlement is valid.
+Both have the same totals: A owes ₹300, B’s total is zero, and C should receive ₹300. But the people who owe each other are different. Those totals alone cannot tell us whom A should pay.
 
-This representation would be reasonable if the interviewer explicitly wanted only simplified net balances. It isn't enough for our current contract.
+This representation works if we only need each person’s overall total. Our requirements also need to preserve who owes whom.
 
 #### Good Solution: Store both directions
 
@@ -217,23 +219,23 @@ The ordering uses IDs, not display names. Renaming “Asha” must not change th
 
 Now opposite obligations become ordinary addition. If A owes B ₹300 and a later expense makes B owe A ₹100, the same entry changes from `30000` to `20000`.
 
-We'll use this representation. It gives us one value to update for either direction of a debt. The tradeoff is less obvious arithmetic: a negative number is easy to misread, so we'll centralize the sign conversion in one helper. Finding all debts for one person also requires scanning the pair map unless we add an index later.
+We'll use this representation. It gives us one value to update for either direction of a debt. The downside is that negative amounts are easy to misread. We’ll use one helper to convert a debt into the correct sign. Finding all debts for one person also requires scanning the pair map unless we add an index later.
 
 The sign convention is internal. Callers receive `Debt(debtor, creditor, positiveAmount)` so UI code doesn't have to understand it.
 
 **History and current balances.**
 
-We have two representations of related information. Is that a mistake?
+Why keep both history and current balances?
 
-One option is to keep only expense and settlement history and replay it whenever someone asks for balances. This gives one authoritative record of events and makes writes simple. The cost is reading the entire history for every balance query and settlement validation.
+We could store only the history. To find current balances, we would apply every expense and settlement again in order. Adding records would be simple, but every balance query and settlement check would need to read the whole history.
 
-We'll keep history plus a balance index. History preserves the facts; the index answers current-debt questions quickly. Every successful mutation updates both under the same group lock. The invariant is:
+We’ll keep history and a map of current balances. History explains how the debts arose. The map lets us look up what is owed now. Every accepted expense or settlement updates both under the same group lock. They must always agree:
 
 ```text
 current balances == replay of accepted history
 ```
 
-This is controlled duplication. It needs discipline, and replay is a useful way to verify it. We aren't going to add a second map for per-user totals, a third map for creditor lists, and a fourth map for debtor lists without a demonstrated need.
+We can check that they agree by rebuilding balances from history and comparing the result with the map. We don’t need extra maps for per-user totals or creditor lists unless a requirement calls for them.
 
 ```text
 class Group:
@@ -263,9 +265,9 @@ else if splitType == PERCENTAGE:
 apply shares to balances
 ```
 
-This works. For three fixed split types, an enum and a helper are defensible. But notice the boundary in that sketch: everything above the blank line decides how much each participant owes; everything below it updates the same ledger, regardless of how those amounts were obtained.
+This works for three fixed split types. A string and a helper would be enough. Notice that the first part calculates each person’s share. The second part updates debts from those shares. That second part is the same for every split type.
 
-If someone stays twice as long, they might pay twice as much. A new strategy handles that calculation; the code for balances, history, and settlements stays the same.
+If someone stays twice as long, they might pay twice as much. A new strategy handles that calculation. The code for balances, history, and settlements stays the same.
 
 That gives us a small Strategy interface:
 
@@ -278,13 +280,13 @@ ExactSplitStrategy()
 PercentageSplitStrategy()
 ```
 
-The strategies have no expense-specific fields. Each call receives the total, participants, and values. Exact values are amounts in paise; percentage values are basis points: `2500` means 25.00%, and `10000` means 100%. Values follow participant order; equal splits use no values.
+The strategies have no expense-specific fields. Each call receives the total, participants, and values. Exact values are amounts in paise. Percentage values are basis points: `2500` means 25.00%, and `10000` means 100%. Values follow participant order. Equal splits use no values.
 
 This lets the same strategy instance calculate different expenses. A strategy could also hold configuration without violating the pattern or single responsibility. Here, passing expense data into the method makes the separation easier to follow.
 
-We'll use separate strategies because allocation is a meaningful behavior to test independently. The cost is three small classes and a service-side lookup. A small lookup is enough; a separate factory hierarchy would add little for three modes. Group accepts the resulting strategy internally, while clients only submit split data.
+We'll use separate strategies because allocation is a meaningful behavior to test independently. The cost is three small classes and a service-side lookup. A map from split type to strategy is enough to select among the three modes. Group accepts the resulting strategy internally, while clients only submit split data.
 
-Group still validates the returned allocation. It knows membership; the strategy doesn't. It also verifies that shares are nonnegative integers and sum to the total. A new strategy must not be able to create money by returning invalid shares.
+Group still validates the returned allocation. Group knows who its members are. The strategy only knows the participants passed to it. It also verifies that shares are nonnegative integers and sum to the total. A new strategy must not be able to create money by returning invalid shares.
 
 ### Expense, Settlement, and Debt
 
@@ -307,7 +309,7 @@ Debt
   amount: long                     // positive outstanding amount, in paise
 ```
 
-All three are immutable; Expense copies its shares and stores final amounts so later rounding changes cannot alter history. Settlement belongs to Group because it reduces the current debt across expenses.
+All three records are immutable. Expense copies the final shares so later rounding changes cannot alter history. Group handles settlement because a person’s current debt can come from several expenses.
 
 ### Final class design
 
@@ -346,7 +348,7 @@ Debt(debtor: String, creditor: String, amount: long)
 // All monetary values are integer paise; totals and settlement/debt amounts are positive.
 ```
 
-The key invariants are worth saying aloud before implementing:
+Before implementing, let’s list the rules that must always hold:
 
 1. An expense's shares sum exactly to its positive total.
 2. Every referenced user belongs to the group.
@@ -364,7 +366,9 @@ We don't need to spend equal time implementing every class. The important method
 - **SplitStrategy.allocate:** implement equal, exact, and percentage splits. Getting the total right, especially after rounding, is the interesting part.
 - **Group.addExpense:** validate the expense, calculate shares, and update balances and history together.
 - **Group.recordSettlement:** check the current debt before reducing it. A rejected payment must leave the group unchanged.
-- **SplitwiseService:** sketch the split-type lookup and delegation. Expense, Settlement, and Debt only need the immutable fields already defined; getters need snapshot behavior, not a full walkthrough.
+- **SplitwiseService:** show how the service chooses a strategy and calls Group.
+
+Expense, Settlement, and Debt only store the fields we already defined. We don’t need to implement them in detail here. We’ll also explain how balance and history reads return copies that callers cannot use to change group data.
 
 We'll show the service entry point, implement the allocation algorithms, then connect them to Group. Before coding the two Group mutations, we'll trace a successful operation and a rejection. Small helpers only need a brief explanation.
 
@@ -384,11 +388,11 @@ one history record, two current debts
 
 The strategy never needs to know who paid. It answers how the cost is shared. The group turns those shares into obligations to the payer.
 
-The snippets below use Python and Java-style pseudocode. They share the same semantics. Complete executable reference implementations are linked later. Expected validation failures happen before mutation; process crashes and allocation failures require persistence and transactional recovery, which are outside this in-memory exercise.
+The snippets below use Python and Java-style pseudocode. They share the same semantics. Complete executable reference implementations are linked later. Invalid requests must be rejected before changing balances or history. This in-memory version does not handle process crashes or memory allocation failures.
 
 ### SplitwiseService
 
-The caller supplies data; the service chooses the calculation:
+The caller supplies the expense data. The service uses the split type to choose a strategy:
 
 Python:
 
@@ -434,7 +438,7 @@ SplitStrategy strategy = strategies.get(splitType);
 return group.addExpense(payer, total, strategy, participants, values);
 ```
 
-The service selects the algorithm; Group passes the expense inputs to it. Nothing is stored on the strategy between calls.
+The service selects the algorithm. Group passes the expense inputs to it. Nothing is stored on the strategy between calls.
 
 Group accepts a strategy internally. The public service accepts a split-type string and plain expense data. We don't need a factory class or a request-object hierarchy for this.
 
@@ -442,7 +446,9 @@ Group accepts a strategy internally. The public service accepts a split-type str
 
 All three strategies implement `allocate(total, participants, values)` and return each participant's share in paise. The snippets below show their method bodies.
 
-The shared `participant_ids` / `participantIds` helper copies and validates a nonempty list of unique user IDs. `split_values` / `splitValues` pairs those IDs with nonnegative integer values, rejecting missing values and length mismatches before building a map. These are small validation helpers, not new classes.
+The `participant_ids` / `participantIds` helper copies the participant list. It checks that the list is nonempty and contains valid, unique IDs.
+
+The `split_values` / `splitValues` helper checks that every participant has one nonnegative integer value. It then builds a map from user ID to value.
 
 **EqualSplitStrategy and the missing paise.**
 
@@ -458,7 +464,7 @@ A: 3334, B: 3333, C: 3333
 Total: 10000
 ```
 
-Sort the participant IDs and give one extra paise to each of the first `remainder` participants. This is deterministic and independent of request-list order. It does favor lower IDs across repeated ties; rotating that priority would be a different business policy requiring additional state.
+Sort the participant IDs and give one extra paise to each of the first `remainder` participants. The same participants get the same shares even if the input order changes. Lower IDs will receive the extra paise whenever there is a tie. Rotating who gets it would require us to remember whose turn is next.
 
 Python:
 
@@ -522,15 +528,15 @@ Map<String, Long> allocate(long total, List<String> participants, List<Long> val
 }
 ```
 
-The Java version uses checked addition. An overflow must reject the operation instead of wrapping into a plausible-looking total. Python's integers can grow beyond a fixed machine word, but the API must still reject fractional amounts and booleans masquerading as integers.
+The Java version uses checked addition. If the sum exceeds the range of a Java `long`, reject the operation. Python integers can grow, but we must still reject fractional amounts and booleans.
 
-At the request boundary, reject duplicate user IDs before constructing a map. Once duplicates have overwritten each other in a map, the allocation layer can't recover the original input.
+Reject duplicate user IDs before building the map. Otherwise, one value can overwrite another and hide the duplicate.
 
 **PercentageSplitStrategy and rounding fairly.**
 
 For percentages, independently rounding each result is unsafe. Take 101 paise split 33.33%, 33.33%, and 33.34%. The exact shares are 33.6633, 33.6633, and 33.6734 paise. Rounding each to the nearest paise gives 34 + 34 + 34 = 102. We've charged the group an extra paise.
 
-We'll use the largest-remainder method. Compute every exact quota using integer arithmetic, allocate its floor, then give leftover paise to the largest fractional remainders. Break ties using user ID.
+We’ll use the largest-remainder method. First, calculate each share and round it down to whole paise. Then give the leftover paise to the people whose shares had the largest fractional parts. If two fractional parts are equal, use user ID to break the tie. We can do all of this with integer arithmetic.
 
 For 101 paise split 33.33%, 33.33%, and 33.34%:
 
@@ -540,7 +546,7 @@ For 101 paise split 33.33%, 33.33%, and 33.34%:
 | B | 3333 | 33.6633 | 33 | 6633 |
 | C | 3334 | 33.6734 | 33 | 6734 |
 
-The floors sum to 99. Two paise remain. C gets the first; A wins the tie for the second. Final shares are A=34, B=33, C=34.
+The floors sum to 99. Two paise remain. C gets the first. A wins the tie for the second. Final shares are A=34, B=33, C=34.
 
 Python:
 
@@ -599,11 +605,11 @@ Notice that a 0% participant gets no fractional remainder and no allocation. The
 
 ### Group
 
-The group turns allocations into debts and records settlements. Its methods share one sign convention and one lock, so we'll establish those helpers before following the two mutation paths.
+The group turns allocations into debts and records settlements. We’ll first show how to turn a debt into a signed balance. Then we’ll implement expenses and settlements using the same group lock.
 
 **Translating a share into debt.**
 
-Every participant owes their allocated share to the payer, except when the participant is the payer. We need one helper to translate that directed obligation into our canonical key and sign.
+Every participant owes their allocated share to the payer, except when the participant is the payer. A helper will sort the two user IDs and choose the sign that represents who owes whom.
 
 Python:
 
@@ -631,13 +637,13 @@ Callers exclude self-debts before using this helper. Keeping the sign conversion
 
 **Group.addExpense.**
 
-We now know how to calculate shares. The next job is to accept all of an expense together. If Ben's debt changes but Chen's doesn't, we haven't recorded a smaller expense; we've recorded a broken one.
+We now know how to calculate shares. Now we need to apply the whole expense. If we update Ben’s debt but fail before updating Chen’s, the balances will be wrong.
 
 For a ₹900 expense paid by A for A, B, and C, starting with no debts:
 
-1. Check the payer, total, and participant list; all three users must belong to the group.
+1. Check the payer, total, and participant list. All three users must belong to the group.
 2. Pass the expense inputs to the equal-split strategy. It returns ₹300 each. Check that the returned users and total match the request.
-3. Create the Expense record. Under the group lock, prepare B → A ₹300 and C → A ₹300; A's own share creates no debt.
+3. Create the Expense record. Under the group lock, prepare B → A ₹300 and C → A ₹300. A’s own share creates no debt.
 4. Commit both balances and append the expense to history, then return it.
 
 Now try an exact split of ₹900 with shares of ₹300, ₹300, and ₹200. The strategy rejects the ₹800 sum before any balance or history changes. A nonmember is rejected even earlier. If preparing a new balance overflows in Java, nothing is committed either. That's why validation and calculation come before writes.
@@ -702,11 +708,11 @@ The returned user IDs must match the requested participants exactly. `validateAl
 
 Why calculate `pending` first? In Java, checked arithmetic can fail. If we update Ben's balance and then discover overflow while updating Chen's, we have a partial expense. Preparing every new value before writing prevents that. Each participant produces at most one pair because there is exactly one payer and participants are unique.
 
-The strategy retains no inputs or results, so concurrent calls can safely share its instance. Allocation happens outside the lock because it is a pure calculation and membership never changes in this version. Balance updates depend on current state and belong inside. This division keeps the critical section small without weakening correctness.
+The strategy retains no inputs or results, so concurrent calls can safely share its instance. Allocation happens outside the lock because it is a pure calculation and membership never changes in this version. Balance updates depend on current state and belong inside. That lets other operations use the group while shares are being calculated.
 
 **Committing balances and history together.**
 
-The `pending` map contains replacement balances, not deltas. For each affected pair, we've already combined the old balance with the new obligation. The remaining work is deliberately mechanical:
+The `pending` map contains each pair’s new balance after adding the expense. All calculations are finished. We now store those balances and append the history record:
 
 Python:
 
@@ -733,7 +739,9 @@ private void commit(Map<Pair, Long> pending, Event event) {
 }
 ```
 
-No business validation belongs here: a rejection after the first write would leave a partial update. Readers take the same lock, so they cannot observe the interval between updating the pairs and appending history. This is atomic visibility within our process, not crash recovery. Durable all-or-nothing writes need a database transaction, which we'll discuss in the follow-ups.
+All validation must finish before this method runs. Rejecting an expense after the first write could leave some balances changed. Reads use the same lock, so they wait until both balances and history are updated.
+
+The lock does not protect us from a process crash. Saving these changes safely to a database requires a transaction, which we’ll discuss in the follow-ups.
 
 **Concurrency tradeoffs.**
 
@@ -752,13 +760,13 @@ We have recorded ₹160 against a ₹100 debt. Depending on the update code, the
 
 ##### Good Solution: One service-wide lock
 
-This serializes every group. It is easy to implement, but adding dinner in one group blocks a completely unrelated group's settlement. There is no shared debt state between them, so that coordination is unnecessary.
+This allows only one group operation at a time across the entire service. It is easy to implement, but adding dinner in one group blocks a completely unrelated group's settlement. There is no shared debt state between them, so that coordination is unnecessary.
 
 ##### Great Solution: One lock per group
 
-An expense may change several pairs and history together. A group lock covers that whole consistency boundary. Independent groups proceed concurrently, while related operations observe complete updates.
+An expense may change several pairs and history together. A group lock keeps those changes together. Other operations on that group wait until the update finishes. Operations on different groups can continue.
 
-Per-pair locks are possible, but a multi-participant expense then needs multiple locks in a stable order, history needs coordinated updates, and readers need consistent snapshots. That's a substantial complexity increase. Start with a group lock; consider finer granularity only when a measured workload justifies it.
+We could use a lock for each pair of users. But one expense might then need several locks, acquired in a fixed order to avoid deadlocks. We would also need to coordinate history updates and reads. Start with one group lock. Consider smaller locks only if measurements show that waiting on the group lock is a problem.
 
 **Group.recordSettlement.**
 
@@ -820,9 +828,11 @@ Creating the event before acquiring the lock doesn't record anything. It's just 
 
 Reads use the same group lock. Otherwise a balance query could see Ben's updated share but Chen's old one halfway through an expense.
 
-For each positive pair balance, return lower ID as debtor; for a negative balance, reverse the IDs and return the magnitude. Return a detached immutable collection of Debt records. History likewise returns a snapshot containing immutable records.
+For a positive balance, the lower ID is the debtor. For a negative balance, the higher ID is the debtor. In either case, return a Debt record with a positive amount.
 
-The caller can keep or display a snapshot after the lock is released. It may become stale as new expenses arrive, which is normal. It cannot corrupt the group's internal state. Separate calls to `getBalances` and `getHistory` are separate snapshots; if a client needs them from the same instant, expose one combined snapshot method.
+Return copies of the balances and history as they were when read. These snapshots contain immutable records, so callers cannot change the group through them.
+
+The caller can keep or display a snapshot after the lock is released. It may become stale as new expenses arrive, which is normal. It cannot corrupt the group's internal state. A change can happen between calls to `getBalances` and `getHistory`. If a caller needs both from the same moment, return them together under one lock.
 
 **Complexity.**
 
@@ -833,12 +843,12 @@ Let `k` be expense participants, `b` the group's nonzero debt pairs, and `h` its
 | Equal split | O(k log k) | Sorting makes remainder allocation deterministic. |
 | Exact split | O(k) | Validate and copy shares. |
 | Percentage split | O(k log k) | Sort by fractional remainder and ID. |
-| Apply allocation | O(k) average | Hash lookups and pending updates; history append amortized O(1). |
+| Apply allocation | O(k) average | Prepare and update k pairs. Appending history takes amortized O(1). |
 | Record settlement | O(1) average | One pair update and one history append. |
 | Sorted balance snapshot | O(b log b) | O(b) output space. |
 | History snapshot | O(h) | Copies references to immutable records. |
 
-The arithmetic bounds assume ordinary bounded monetary inputs; arbitrarily large integers have their own digit-dependent cost. History storage grows with all retained events and their allocations, not just the number of members. Pagination and archival are natural production additions.
+These time estimates treat arithmetic as constant time. With arbitrarily large Python integers, arithmetic also depends on the number of digits. History storage grows with all retained events and their allocations, not just the number of members. Pagination and archival are natural production additions.
 
 ### Complete reference implementations
 
@@ -847,7 +857,7 @@ The arithmetic bounds assume ordinary bounded monetary inputs; arbitrarily large
 - [Python verification suite](test_splitwise.py): rounding, ledger replay, settlement validation, isolation, and concurrent updates.
 - [Java verification suite](SplitwiseTest.java): rounding, conservation, netting, settlements, overflow rejection, and competing settlements.
 
-The implementations are deliberately small enough to read together with the article. They implement the base requirements; the following extensions are design discussions.
+The implementations are deliberately small enough to read together with the article. They implement the base requirements. The extensions below are discussion topics.
 
 Run the checks from this article's directory:
 
@@ -861,7 +871,7 @@ java -cp /tmp/splitwise-classes SplitwiseTest
 
 ## Verification
 
-Let's follow complete state changes rather than just calling methods and hoping the output looks reasonable. Use IDs A, B, and C for Asha, Ben, and Chen.
+Let’s check the balances and history after a sequence of operations. Use IDs A, B, and C for Asha, Ben, and Chen.
 
 Before tracing the ledger, call the service with each split type and verify the shares. Reject unknown types, duplicate participants, mismatched value counts, invalid totals, and nonmembers without changing balances or history. Changing the caller's lists after a call must not alter the stored expense.
 
@@ -942,7 +952,7 @@ Now try a different failure: an exact allocation totaling ₹100, but containing
 
 Also reject a negative share, an empty split, and percentages summing to 99.99%.
 
-Compare both balances and history before and after each failure. Checking only the exception is insufficient; a method can throw after it has already damaged state.
+Compare both balances and history before and after each failure. Checking only for an exception is not enough. A method could change a balance and then throw.
 
 ### Test case 5: competing settlements
 
@@ -977,13 +987,13 @@ Use the same EqualSplitStrategy instance for 100 paise among A and B, then 90 pa
 
 ## Extensibility
 
-The basic design is enough for a substantial interview. If there is time, these follow-ups test different kinds of reasoning: graph transformations, retry semantics, reversibility, and richer payment inputs.
+If there is time after the main implementation, discuss how the design would change for these new requirements.
 
 ### How would you simplify debts to reduce payments?
 
 Suppose A owes B ₹300 and B owes C ₹300. Rather than making two payments, A could pay C directly. Everyone's net financial position would be the same.
 
-> I'd derive each person's net position from the pair balances, then match debtors with creditors. I would first expose this as a proposed payment plan. Applying that plan needs explicit semantics because it changes who is allowed to settle with whom.
+> I'd derive each person's net position from the pair balances, then match debtors with creditors. I would first expose this as a proposed payment plan. Before applying the plan, we need to decide how settlements will work when the people paying each other have changed.
 
 For every debt from debtor D to creditor C of amount X, subtract X from D's net position and add X to C's. Positive balances represent money to receive. Negative balances represent money to pay.
 
@@ -1012,21 +1022,23 @@ while i < len(debtors) and j < len(creditors):
         j += 1
 ```
 
-In our example, B's net position is zero, so B disappears from both lists. The only match is A paying C ₹300. With more people, the same loop consumes one or both positions on each iteration. Building the positions takes O(b), sorting takes O(m log m), and matching takes O(m), where `b` is the number of current debt pairs and `m` the number of nonzero positions.
+In our example, B's net position is zero, so B disappears from both lists. The only match is A paying C ₹300. With more people, each pass through the loop clears at least one person’s remaining amount. Building the positions takes O(b), sorting takes O(m log m), and matching takes O(m), where `b` is the number of current debt pairs and `m` the number of nonzero positions.
 
-Each payment clears at least one remaining position. With `m` nonzero positions, this produces at most `m - 1` payments. It does not guarantee the globally smallest possible number of transactions. Don't advertise a minimum-transaction algorithm unless you've actually solved that harder optimization problem.
+Each payment clears at least one remaining position. With `m` nonzero positions, this produces at most `m - 1` payments. It does not guarantee the fewest possible payments. Finding that minimum is a harder problem.
 
 There is a subtle integration issue. In the original graph, A has no direct debt to C, so our base `recordSettlement(A, C, amount)` correctly rejects the suggested payment. Showing a simplified plan does not automatically make the ledger able to accept it.
 
-One option is an explicit, audited debt-restructuring operation that atomically replaces pair balances with the proposed equivalent graph. That operation must appear in history so replay still works, preserve every user's net position, and verify the group hasn't changed since the plan was calculated, for example with a group version. Another option records the direct payment while applying reductions along the agreed original debt path. Either way, the product must define whether members consent to changing their counterparties.
+One option is to replace the current debts with the proposed debts in a single operation. Record this change in history so we can still rebuild the balances. Check that each person’s overall amount stays the same. Also check that the group has not changed since we calculated the plan, for example by comparing a group version number.
 
-For an interview, explain the proposal algorithm and this integration boundary. A greedy loop by itself is not a complete simplification feature.
+Another option is to keep the original debts and reduce each debt along the agreed payment path when a payment happens. Either approach needs clear rules about whether members must agree to a change in whom they pay.
+
+In an interview, explain both how to suggest fewer payments and how the system would record them.
 
 ### What if the client retries after a timeout?
 
 Our generated event ID identifies an accepted record. It doesn't stop duplicate submissions. If an expense succeeded but the response was lost, retrying it currently adds the expense again.
 
-> I'd require a caller-generated operation ID for mutations. Under the group lock, I'd look it up before applying the operation. An identical retry returns the original result; reuse with different input is rejected.
+> I'd require a caller-generated operation ID for mutations. Under the group lock, I'd look it up before applying the operation. An identical retry returns the original result. If the same ID comes with different input, reject it.
 
 ```text
 Group:
@@ -1044,11 +1056,13 @@ mutate(operationId, request):
         return result
 ```
 
-The lookup, mutation, and operation record must share the same consistency boundary. For settlements, check for a successful retry before rejecting it against the now-reduced debt.
+Check the operation ID, update balances and history, and save the result under the same lock. For settlements, check for a successful retry before rejecting it against the now-reduced debt.
 
-Fingerprint semantic request data, including operation type, group, users, amount, and normalized split configuration. An expense's split mode may matter even when two modes happen to produce the same allocation. In a persistent implementation, use a transaction and a uniqueness constraint scoped to the group and operation ID.
+Store a consistent representation of the request, or a fingerprint computed from it, so retries can be compared. Include the operation type, group, users, amount, split type, and split values. Two split types can produce the same shares but still represent different requests.
 
-The idempotency map also needs a retention policy. Removing an old key means a sufficiently late retry may become a new operation. That is an API guarantee to define, not an arbitrary cache tuning detail.
+With a database, save the operation ID and result in the same transaction as the balance changes. A uniqueness constraint on group ID and operation ID prevents the same operation from being recorded twice.
+
+Decide how long to keep these operation IDs. Once an ID is removed, a late retry could be treated as a new operation. Callers need to know how long retries are safe.
 
 ### How would you edit or delete an expense?
 
@@ -1058,7 +1072,7 @@ Updating the Expense object is the wrong starting point because it has already c
 
 For deletion, there is no replacement allocation. For editing, validate the entire replacement before modifying any balances. A stable expense ID plus a revision number helps detect two people editing the same version concurrently.
 
-Existing settlements make this interesting. Suppose Ben owed Asha ₹100, paid it, and the expense is later deleted. Reversing that expense now makes Asha owe Ben ₹100. That's an intelligible refund obligation, but the product needs to accept that policy explicitly.
+Existing settlements make this interesting. Suppose Ben owed Asha ₹100, paid it, and the expense is later deleted. Reversing that expense now makes Asha owe Ben ₹100. Asha would now need to refund Ben. Confirm that this is the behavior the product wants.
 
 ```text
 Original expense: (A,B) = -10000     B owes A ₹100
@@ -1068,7 +1082,7 @@ Delete expense:  (A,B) += 10000     A now owes B ₹100
 
 The settlement remains in history because the payment really happened. The correction reverses the expense's contribution, not the entire pair balance. Resetting that pair to zero would erase the refund obligation and could also erase unrelated expenses.
 
-An alternative is to prohibit edits after settlement, but settlements net across expenses, so determining which expense has been “settled” would require a new allocation model. This is why append-only corrections often fit the existing design better.
+We could forbid edits after an expense is settled. But our settlements reduce a combined debt, not a particular expense. To enforce that rule, we would need to track which expenses each repayment covers. Adding correction records fits our current design more easily.
 
 ### How would you support multiple payers?
 
@@ -1080,19 +1094,19 @@ For each user, compute:
 net contribution = amount paid - allocated share
 ```
 
-A positive contribution means the user should receive money; a negative contribution means they owe money. Match debtors and creditors using a documented deterministic rule to create this expense's pair obligations.
+A positive contribution means the user should receive money. A negative contribution means they owe money. Choose a consistent rule for matching people who owe money with people who should receive it.
 
-The allocation is not unique when several people paid and several people owe. Choose a policy, such as ascending ID matching, and store the resulting obligation edges in the expense record. That preserves replay behavior even if the matching policy changes later.
+When several people paid and several people owe, there may be more than one valid way to match them. For example, match users in ascending ID order. Store the resulting debts in the expense record. That lets us rebuild the same debts from history even if the matching rule changes later.
 
-This matching is within one new expense, where we must choose counterparties. It does not silently simplify existing debts across the whole group.
+This matching only decides who owes whom for the new expense. Existing debts elsewhere in the group stay as they are.
 
 ### How would you add persistence or multiple currencies?
 
 These are separate changes.
 
-For persistence, store events and balance rows in one database transaction. A process-local group lock cannot coordinate multiple application instances. Use database concurrency control, such as locking a group row or checking a group version, with retries for conflicts. Keep idempotency records in that same transaction. Avoid holding a database transaction open while a person authorizes a bank transfer; actual payment processing needs its own workflow.
+For persistence, store events and balance rows in one database transaction. A process-local group lock cannot coordinate multiple application instances. Use database concurrency control, such as locking a group row or checking a group version, with retries for conflicts. Keep idempotency records in that same transaction. Do not keep a database transaction open while waiting for someone to authorize a bank transfer. Payment processing needs a separate flow.
 
-For currencies, never add INR and USD balances together. Introduce a Money value containing currency and minor-unit amount, and partition debt keys by currency. Minor-unit precision is currency-specific; don't hardcode “two decimal places” globally. If conversion is required, record the chosen exchange rate, conversion time, and rounding policy as part of the accepted operation. Conversion changes the accounting semantics and deserves its own requirements discussion.
+For currencies, never add INR and USD balances together. A Money value can hold the currency and an integer amount in its smallest unit, such as paise for INR. Include the currency in each debt’s key so balances stay separate. Currencies have different numbers of decimal places. Don’t assume that every currency uses two. If conversion is required, record the chosen exchange rate, conversion time, and rounding policy as part of the accepted operation. Conversion affects the amounts people owe, so agree on these rules before implementing it.
 
 ## What is expected at each level?
 
@@ -1104,11 +1118,15 @@ Aim for a working equal-split flow with a sensible service/group boundary. You s
 
 ### Mid-level
 
-You should independently distinguish expense history from current balances and implement all three splitting modes with exact totals. The pairwise sign convention should be consistent, records should be immutable, and partial settlements should reject overpayment. Explain the strategy-versus-switch tradeoff without treating a pattern as mandatory. Recognize the concurrent settlement race and protect the check and update together. Verification should include rejected operations leaving state unchanged.
+Implement all three split types and make sure their shares add up exactly. Keep history separate from current balances, use signs consistently, and prevent callers from changing stored records. Reject settlements that exceed the debt.
+
+Explain when separate strategies help and when a simple switch would be enough. Show why two simultaneous settlements need a lock around both the debt check and the update. Test that rejected operations leave balances and history unchanged.
 
 ### Senior
 
-Drive the discussion around invariants and scope. Explain why pair balances and per-user net positions answer different questions, why a group is the atomic update boundary, and why a thread-safe map alone is insufficient. Catch rounding, overflow, defensive-copy, and retry issues without prompting. For extensions, discuss how simplified payments interact with the original ledger, how corrections affect settled expenses, and how persistence changes concurrency guarantees. The strongest answer connects these choices to explicit requirements while keeping the base design small enough to implement and verify.
+Clarify the requirements and the rules the system must always preserve. Explain why a person’s overall total cannot tell us whom they owe. Show why an expense must update the whole group together and why a thread-safe map alone does not ensure that.
+
+Look for rounding errors, overflow, mutable input data, and duplicate retries without needing hints. For follow-ups, explain how to record simplified payments, correct expenses that have already been repaid, and handle concurrent updates in a database. Keep the main design small enough to implement and test.
 
 ## Test your understanding
 
