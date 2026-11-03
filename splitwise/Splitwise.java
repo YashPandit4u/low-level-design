@@ -3,36 +3,22 @@ import java.util.*;
 
 /** Java 17+ reference implementation for the accompanying article. */
 public final class Splitwise {
-    static void require(boolean condition, String message) {
-        if (!condition) throw new IllegalArgumentException(message);
-    }
-    static void validId(String id) {
-        require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
-    }
-    static List<String> participantIds(List<String> participants) {
-        require(participants != null && !participants.isEmpty(), "Participants required");
-        participants.forEach(Splitwise::validId);
-        var users = List.copyOf(participants);
-        require(new HashSet<>(users).size() == users.size(), "Duplicate participant");
-        return users;
-    }
-    static Map<String, Long> splitValues(List<String> users, List<Long> values) {
-        require(values != null && values.size() == users.size(), "One value per participant required");
-        for (Long value : values) require(value != null && value >= 0, "Invalid split value");
-        values = List.copyOf(values);
-        Map<String, Long> result = new HashMap<>();
-        for (int i = 0; i < users.size(); i++) result.put(users.get(i), values.get(i));
-        return result;
-    }
     // Internal stateless algorithms; expense inputs arrive on each call.
     interface SplitStrategy {
         Map<String, Long> allocate(long total, List<String> participants, List<Long> values);
     }
     static final class EqualSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-            require(total > 0, "Positive total required");
-            var sorted = new ArrayList<>(participantIds(participants));
-            require(values == null, "Equal splits do not take values");
+            if (total <= 0) throw new IllegalArgumentException("Positive total required");
+            if (participants == null || participants.isEmpty())
+                throw new IllegalArgumentException("Participants required");
+            if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
+                throw new IllegalArgumentException("Invalid participant ID");
+            participants = List.copyOf(participants);
+            if (new HashSet<>(participants).size() != participants.size())
+                throw new IllegalArgumentException("Duplicate participant");
+            var sorted = new ArrayList<>(participants);
+            if (values != null) throw new IllegalArgumentException("Equal splits do not take values");
             Collections.sort(sorted);
             long base = total / sorted.size(), remainder = total % sorted.size();
             Map<String, Long> result = new HashMap<>();
@@ -43,24 +29,50 @@ public final class Splitwise {
     }
     static final class ExactSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-            require(total > 0, "Positive total required");
-            var amounts = splitValues(participantIds(participants), values);
+            if (total <= 0) throw new IllegalArgumentException("Positive total required");
+            if (participants == null || participants.isEmpty())
+                throw new IllegalArgumentException("Participants required");
+            if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
+                throw new IllegalArgumentException("Invalid participant ID");
+            participants = List.copyOf(participants);
+            if (new HashSet<>(participants).size() != participants.size())
+                throw new IllegalArgumentException("Duplicate participant");
+            if (values == null || values.size() != participants.size())
+                throw new IllegalArgumentException("One value per participant required");
+            if (values.stream().anyMatch(value -> value == null || value < 0))
+                throw new IllegalArgumentException("Invalid split value");
+            Map<String, Long> amounts = new HashMap<>();
+            for (int i = 0; i < participants.size(); i++)
+                amounts.put(participants.get(i), values.get(i));
             long sum = 0;
             for (long amount : amounts.values()) sum = Math.addExact(sum, amount);
-            require(sum == total, "Shares must sum to total");
+            if (sum != total) throw new IllegalArgumentException("Shares must sum to total");
             return amounts;
         }
     }
     static final class PercentageSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-            require(total > 0, "Positive total required");
-            var bps = splitValues(participantIds(participants), values);
+            if (total <= 0) throw new IllegalArgumentException("Positive total required");
+            if (participants == null || participants.isEmpty())
+                throw new IllegalArgumentException("Participants required");
+            if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
+                throw new IllegalArgumentException("Invalid participant ID");
+            participants = List.copyOf(participants);
+            if (new HashSet<>(participants).size() != participants.size())
+                throw new IllegalArgumentException("Duplicate participant");
+            if (values == null || values.size() != participants.size())
+                throw new IllegalArgumentException("One value per participant required");
+            if (values.stream().anyMatch(value -> value == null || value < 0))
+                throw new IllegalArgumentException("Invalid split value");
+            Map<String, Long> bps = new HashMap<>();
+            for (int i = 0; i < participants.size(); i++)
+                bps.put(participants.get(i), values.get(i));
             long sum = 0;
             for (long weight : bps.values()) {
-                require(weight <= 10000, "Invalid percentage");
+                if (weight > 10000) throw new IllegalArgumentException("Invalid percentage");
                 sum += weight;
             }
-            require(sum == 10000, "Percentages must sum to 10000 basis points");
+            if (sum != 10000) throw new IllegalArgumentException("Percentages must sum to 10000 basis points");
             Map<String, Long> shares = new HashMap<>();
             Map<String, Long> fractions = new HashMap<>();
             long allocated = 0;
@@ -96,14 +108,12 @@ public final class Splitwise {
         private final List<Event> history = new ArrayList<>();
         private final Object lock = new Object();
         public Group(List<String> users) {
-            require(!users.isEmpty(), "Group members required");
-            users.forEach(Splitwise::validId);
+            if (users == null || users.isEmpty())
+                throw new IllegalArgumentException("Group members required");
+            if (users.stream().anyMatch(id -> id == null || id.isBlank()))
+                throw new IllegalArgumentException("Invalid member ID");
             members = Set.copyOf(users);
-            require(members.size() == users.size(), "Duplicate member");
-        }
-        private void member(String user) {
-            validId(user);
-            require(members.contains(user), "Unknown group member");
+            if (members.size() != users.size()) throw new IllegalArgumentException("Duplicate member");
         }
         private static Delta delta(String debtor, String creditor, long amount) {
             return debtor.compareTo(creditor) < 0
@@ -112,21 +122,28 @@ public final class Splitwise {
         }
         public Expense addExpense(String payer, long total, SplitStrategy strategy,
                                   List<String> participants, List<Long> values) {
-            require(total > 0, "Positive total required");
-            member(payer);
-            participants = participantIds(participants);
-            participants.forEach(this::member);
+            if (total <= 0) throw new IllegalArgumentException("Positive total required");
+            if (payer == null || !members.contains(payer))
+                throw new IllegalArgumentException("Unknown payer");
+            if (participants == null || participants.isEmpty())
+                throw new IllegalArgumentException("Participants required");
+            if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
+                throw new IllegalArgumentException("Invalid participant ID");
+            participants = List.copyOf(participants);
+            if (new HashSet<>(participants).size() != participants.size())
+                throw new IllegalArgumentException("Duplicate participant");
+            if (!members.containsAll(participants))
+                throw new IllegalArgumentException("Unknown group participant");
             values = values == null ? null : new ArrayList<>(values);
             var shares = Map.copyOf(strategy.allocate(total, participants, values));
-            require(shares.keySet().equals(new HashSet<>(participants)), "Allocation must contain exactly the participants");
-            require(!shares.isEmpty(), "Participants required");
+            if (!shares.keySet().equals(new HashSet<>(participants))) throw new IllegalArgumentException("Allocation must contain exactly the participants");
+            if (shares.isEmpty()) throw new IllegalArgumentException("Participants required");
             long sum = 0;
             for (var entry : shares.entrySet()) {
-                member(entry.getKey());
-                require(entry.getValue() >= 0, "Negative share");
+                if (entry.getValue() < 0) throw new IllegalArgumentException("Negative share");
                 sum = Math.addExact(sum, entry.getValue());
             }
-            require(sum == total, "Invalid strategy result");
+            if (sum != total) throw new IllegalArgumentException("Invalid strategy result");
             var expense = new Expense(UUID.randomUUID().toString(), payer, total, shares);
             synchronized (lock) {
                 Map<Pair, Long> pending = new HashMap<>();
@@ -134,7 +151,7 @@ public final class Splitwise {
                     if (entry.getKey().equals(payer) || entry.getValue() == 0) continue;
                     var d = delta(entry.getKey(), payer, entry.getValue());
                     long next = Math.addExact(balances.getOrDefault(d.pair(), 0L), d.value());
-                    require(next != Long.MIN_VALUE, "Balance magnitude exceeds supported range");
+                    if (next == Long.MIN_VALUE) throw new IllegalArgumentException("Balance magnitude exceeds supported range");
                     pending.put(d.pair(), next);
                 }
                 commit(pending, expense);
@@ -142,15 +159,16 @@ public final class Splitwise {
             return expense;
         }
         public Settlement recordSettlement(String debtor, String creditor, long amount) {
-            require(amount > 0, "Positive settlement required");
-            member(debtor); member(creditor);
-            require(!debtor.equals(creditor), "Cannot settle with yourself");
+            if (amount <= 0) throw new IllegalArgumentException("Positive settlement required");
+            if (debtor == null || creditor == null || !members.contains(debtor) || !members.contains(creditor))
+                throw new IllegalArgumentException("Unknown group member");
+            if (debtor.equals(creditor)) throw new IllegalArgumentException("Cannot settle with yourself");
             var d = delta(debtor, creditor, 1);
             var event = new Settlement(UUID.randomUUID().toString(), debtor, creditor, amount);
             synchronized (lock) {
                 long balance = balances.getOrDefault(d.pair(), 0L);
                 long outstanding = d.value() * balance;
-                require(amount <= outstanding, "Settlement exceeds debt in this direction");
+                if (amount > outstanding) throw new IllegalArgumentException("Settlement exceeds debt in this direction");
                 commit(Map.of(d.pair(), balance - d.value() * amount), event);
             }
             return event;
@@ -182,27 +200,33 @@ public final class Splitwise {
     private final Map<String, Group> groups;
     public Splitwise(Map<String, List<String>> groupMembers) {
         Map<String, Group> built = new HashMap<>();
-        groupMembers.forEach((id, members) -> { validId(id); built.put(id, new Group(members)); });
+        groupMembers.forEach((id, members) -> {
+            if (id == null || id.isBlank()) throw new IllegalArgumentException("Invalid group ID");
+            built.put(id, new Group(members));
+        });
         groups = Map.copyOf(built);
-    }
-    private Group group(String id) {
-        validId(id);
-        var group = groups.get(id);
-        require(group != null, "Unknown group");
-        return group;
     }
     public Expense addExpense(String groupId, String payer, long total, String splitType,
                               List<String> participants, List<Long> values) {
-        var group = group(groupId);
-        validId(payer);
-        require(total > 0, "Positive total required");
-        require(splitType != null && strategies.containsKey(splitType), "Unknown split type");
+        Group group = groupId == null ? null : groups.get(groupId);
+        if (group == null) throw new IllegalArgumentException("Unknown group");
+        if (splitType == null || !strategies.containsKey(splitType)) throw new IllegalArgumentException("Unknown split type");
         return group.addExpense(payer, total, strategies.get(splitType), participants, values);
     }
 
     public Settlement recordSettlement(String groupId, String debtor, String creditor, long amount) {
-        return group(groupId).recordSettlement(debtor, creditor, amount);
+        Group group = groupId == null ? null : groups.get(groupId);
+        if (group == null) throw new IllegalArgumentException("Unknown group");
+        return group.recordSettlement(debtor, creditor, amount);
     }
-    public List<Debt> getBalances(String groupId) { return group(groupId).getBalances(); }
-    public List<Event> getHistory(String groupId) { return group(groupId).getHistory(); }
+    public List<Debt> getBalances(String groupId) {
+        Group group = groupId == null ? null : groups.get(groupId);
+        if (group == null) throw new IllegalArgumentException("Unknown group");
+        return group.getBalances();
+    }
+    public List<Event> getHistory(String groupId) {
+        Group group = groupId == null ? null : groups.get(groupId);
+        if (group == null) throw new IllegalArgumentException("Unknown group");
+        return group.getHistory();
+    }
 }

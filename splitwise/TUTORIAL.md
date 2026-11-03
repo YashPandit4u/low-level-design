@@ -164,27 +164,26 @@ Before coding these two methods, we’ll separate the explanation into:
 
 Small helpers only need a brief explanation.
 
-The Python and Java snippets are pseudocode. `require` rejects invalid input. Result constructors copy the data they receive. Assume amounts fit the chosen integer representation for this first pass. Overflow and concurrent updates are covered in the follow-ups.
+The Python and Java snippets are pseudocode. Result constructors copy the data they receive. Assume amounts fit the chosen integer representation for this first pass. Overflow and concurrent updates are covered in the follow-ups.
 
 ### Group
 
 **Constructor.**
 
-Reject an empty member list, blank IDs, and duplicate members. Copy the accepted IDs and start with an empty debt map. The small `require` helper raises an error when a validation check fails.
+Reject an empty member list, blank IDs, and duplicate members. Copy the accepted IDs and start with an empty debt map. Each method raises an error directly when a check fails.
 
 Python:
 
 ```python
-def require(condition):
-    if not condition:
-        raise ValueError("Invalid operation")
-
 class Group:
     def __init__(self, members):
         users = tuple(members)
-        require(len(users) > 0)
-        require(all(isinstance(uid, str) and uid.strip() for uid in users))
-        require(len(set(users)) == len(users))
+        if not (len(users) > 0):
+            raise ValueError("Invalid operation")
+        if not (all(isinstance(uid, str) and uid.strip() for uid in users)):
+            raise ValueError("Invalid operation")
+        if not (len(set(users)) == len(users)):
+            raise ValueError("Invalid operation")
         self.members = frozenset(users)
         self.debts = {}
 ```
@@ -196,14 +195,10 @@ private final Set<String> members;
 private final Map<Pair, Long> debts = new HashMap<>();
 record Pair(String debtor, String creditor) {}
 
-static void require(boolean condition) {
-    if (!condition) throw new IllegalArgumentException("Invalid operation");
-}
-
 Group(List<String> users) {
-    require(users != null && !users.isEmpty());
-    require(users.stream().allMatch(id -> id != null && !id.isBlank()));
-    require(new HashSet<>(users).size() == users.size());
+    if (!(users != null && !users.isEmpty())) throw new IllegalArgumentException("Invalid operation");
+    if (!(users.stream().allMatch(id -> id != null && !id.isBlank()))) throw new IllegalArgumentException("Invalid operation");
+    if (!(new HashSet<>(users).size() == users.size())) throw new IllegalArgumentException("Invalid operation");
     members = Set.copyOf(users);
 }
 ```
@@ -317,11 +312,16 @@ Python:
 
 ```python
 def add_expense(self, payer, total, participants):
-    require(payer in self.members)
-    require(type(total) is int and total > 0)
-    require(len(participants) > 0)
-    require(len(set(participants)) == len(participants))
-    require(all(uid in self.members for uid in participants))
+    if not (payer in self.members):
+        raise ValueError("Invalid operation")
+    if not (type(total) is int and total > 0):
+        raise ValueError("Invalid operation")
+    if not (len(participants) > 0):
+        raise ValueError("Invalid operation")
+    if not (len(set(participants)) == len(participants)):
+        raise ValueError("Invalid operation")
+    if not (all(uid in self.members for uid in participants)):
+        raise ValueError("Invalid operation")
 
     shares = split_equally(total, participants)
     expense = Expense(payer, total, shares)
@@ -335,10 +335,10 @@ Java:
 
 ```java
 Expense addExpense(String payer, long total, List<String> participants) {
-    require(members.contains(payer));
-    require(total > 0 && !participants.isEmpty());
-    require(new HashSet<>(participants).size() == participants.size());
-    require(members.containsAll(participants));
+    if (!(members.contains(payer))) throw new IllegalArgumentException("Invalid operation");
+    if (!(total > 0 && !participants.isEmpty())) throw new IllegalArgumentException("Invalid operation");
+    if (!(new HashSet<>(participants).size() == participants.size())) throw new IllegalArgumentException("Invalid operation");
+    if (!(members.containsAll(participants))) throw new IllegalArgumentException("Invalid operation");
 
     var shares = splitEqually(total, participants);
     var expense = new Expense(payer, total, shares);
@@ -382,12 +382,16 @@ Python:
 
 ```python
 def record_settlement(self, debtor, creditor, amount):
-    require(debtor in self.members and creditor in self.members)
-    require(debtor != creditor)
-    require(type(amount) is int and amount > 0)
+    if not (debtor in self.members and creditor in self.members):
+        raise ValueError("Invalid operation")
+    if not (debtor != creditor):
+        raise ValueError("Invalid operation")
+    if not (type(amount) is int and amount > 0):
+        raise ValueError("Invalid operation")
     pair = (debtor, creditor)
     outstanding = self.debts.get(pair, 0)
-    require(amount <= outstanding)
+    if not (amount <= outstanding):
+        raise ValueError("Invalid operation")
 
     remaining = outstanding - amount
     if remaining == 0:
@@ -400,11 +404,11 @@ Java:
 
 ```java
 void recordSettlement(String debtor, String creditor, long amount) {
-    require(members.contains(debtor) && members.contains(creditor));
-    require(!debtor.equals(creditor) && amount > 0);
+    if (!(members.contains(debtor) && members.contains(creditor))) throw new IllegalArgumentException("Invalid operation");
+    if (!(!debtor.equals(creditor) && amount > 0)) throw new IllegalArgumentException("Invalid operation");
     var pair = new Pair(debtor, creditor);
     long outstanding = debts.getOrDefault(pair, 0L);
-    require(amount <= outstanding);
+    if (amount > outstanding) throw new IllegalArgumentException("Invalid operation");
 
     long remaining = outstanding - amount;
     if (remaining == 0) debts.remove(pair);
@@ -567,9 +571,12 @@ Python:
 
 ```python
 def percentage_shares(total, weights):
-    require(total > 0 and weights)
-    require(all(type(w) is int and w >= 0 for w in weights.values()))
-    require(sum(weights.values()) == 10000)
+    if not (total > 0 and weights):
+        raise ValueError("Invalid operation")
+    if not (all(type(w) is int and w >= 0 for w in weights.values())):
+        raise ValueError("Invalid operation")
+    if not (sum(weights.values()) == 10000):
+        raise ValueError("Invalid operation")
     shares, fractions = {}, {}
     for uid, weight in weights.items():
         shares[uid], fractions[uid] = divmod(total * weight, 10000)
@@ -584,7 +591,16 @@ Java:
 
 ```java
 Map<String, Long> percentageShares(long total, Map<String, Integer> weights) {
-    validateWeights(total, weights); // positive total; nonempty; weights >= 0; sum 10000
+    if (total <= 0 || weights == null || weights.isEmpty())
+        throw new IllegalArgumentException("Positive total and weights required");
+    long weightSum = 0;
+    for (Integer weight : weights.values()) {
+        if (weight == null || weight < 0 || weight > 10000)
+            throw new IllegalArgumentException("Invalid percentage");
+        weightSum += weight;
+    }
+    if (weightSum != 10000)
+        throw new IllegalArgumentException("Percentages must sum to 10000");
     Map<String, Long> shares = new HashMap<>();
     Map<String, Long> fractions = new HashMap<>();
     long allocated = 0;

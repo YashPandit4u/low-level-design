@@ -167,6 +167,19 @@ class SplitwiseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     operation()
 
+    def test_inline_checks_accept_string_ids_and_reject_bad_data(self):
+        service = SplitwiseService({"voyagé": ["A", "É"]})
+        expense = service.add_expense("voyagé", "A", 100, "EXACT", ["É"], [100])
+        self.assertEqual(dict(expense.shares), {"É": 100})
+        before = service.get_balances("voyagé"), service.get_history("voyagé")
+        for users, values in [([None], [100]), ([[]], [100]), ([" "], [100]), (["É"], [-1]), (["É"], [True])]:
+            with self.assertRaises(ValueError):
+                service.add_expense("voyagé", "A", 100, "EXACT", users, values)
+            self.assertEqual((service.get_balances("voyagé"), service.get_history("voyagé")), before)
+        for invalid in [None, "", " "]:
+            with self.assertRaises(ValueError):
+                SplitwiseService({invalid: ["A"]})
+
     def test_group_isolation_and_unknown_group(self):
         service = SplitwiseService({'trip': ['A', 'B'], 'home': ['A', 'B']})
         service.add_expense('trip', 'A', 100, 'EXACT', ['B'], [100])

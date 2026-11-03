@@ -34,6 +34,18 @@ public final class SplitwiseTest {
             }
             for (var result : allocationPool.invokeAll(tasks)) check(result.get());
         } finally { allocationPool.shutdownNow(); }
+        var unicodeService = new Splitwise(Map.of("voyagé", List.of("A", "É")));
+        check(unicodeService.addExpense("voyagé", "A", 100, "EXACT", List.of("É"), List.of(100L))
+            .shares().equals(Map.of("É", 100L)));
+        var unicodeHistory = unicodeService.getHistory("voyagé");
+        for (List<String> badUsers : List.of(Arrays.asList((String) null), List.of(" "))) {
+            try {
+                unicodeService.addExpense("voyagé", "A", 100, "EXACT", badUsers, List.of(100L));
+                throw new AssertionError("Invalid participant accepted");
+            } catch (IllegalArgumentException expected) {
+                check(unicodeService.getHistory("voyagé").equals(unicodeHistory));
+            }
+        }
         var service = new Splitwise(Map.of("trip", List.of("A", "B", "C")));
         var users = new ArrayList<>(List.of("A", "B", "C"));
         check(service.addExpense("trip", "A", 100, "EQUAL", users, null)

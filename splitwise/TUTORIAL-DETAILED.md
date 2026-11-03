@@ -215,7 +215,7 @@ Sort the two immutable user IDs and use the ordered pair as a key. For key `(A, 
        0 means neither owes the other; remove the entry
 ```
 
-The ordering uses IDs, not display names. Renaming “Asha” must not change the direction of an existing balance. Assume normalized ASCII IDs so Python and Java use the same ordering.
+The ordering uses IDs, not display names. Renaming “Asha” must not change the direction of an existing balance. Use one consistent ID ordering throughout the implementation.
 
 Now opposite obligations become ordinary addition. If A owes B ₹300 and a later expense makes B owe A ₹100, the same entry changes from `30000` to `20000`.
 
@@ -368,7 +368,7 @@ We don't need to spend equal time implementing every class. The important method
 - **Group.recordSettlement:** check the current debt before reducing it. A rejected payment must leave the group unchanged.
 - **SplitwiseService:** show how the service chooses a strategy and calls Group.
 
-We’ll also implement the constructors, shared validation helpers, and read methods used by these operations. The result records are short, so we’ll show their definitions after Group.
+We’ll also implement the constructors and read methods used by these operations. Each method checks its own inputs. The result records are short, so we’ll show their definitions after Group.
 
 We’ll show the service entry point, implement the allocation algorithms, then connect them to Group.
 
@@ -401,39 +401,9 @@ The snippets below use the methods from the runnable Python and Java implementat
 
 The service receives a group ID and plain expense data. It finds the group and chooses a strategy. Group performs the balance changes.
 
-**Basic input checks.**
+**Constructor.**
 
-The service and strategies share two checks. IDs must be nonempty ASCII strings. Amounts must be integers at or above the supplied minimum: 1 for expense totals and payments, 0 for individual shares.
-
-Python explicitly rejects booleans because `bool` is a subclass of `int`. Java uses `require` to throw an error when a condition fails. Its money parameters already have type `long`.
-
-Python:
-
-```python
-def integer(value, minimum=0):
-    if type(value) is not int or value < minimum:
-        raise ValueError(f"Expected an integer >= {minimum}")
-
-def user_id(value):
-    if not isinstance(value, str) or not value.strip() or not value.isascii():
-        raise ValueError("ID must be a nonempty ASCII string")
-```
-
-Java:
-
-```java
-static void require(boolean condition, String message) {
-    if (!condition) throw new IllegalArgumentException(message);
-}
-
-static void validId(String id) {
-    require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
-}
-```
-
-**Constructor and group lookup.**
-
-Create the groups once at startup and keep one instance of each strategy. The lookup helper rejects unknown group IDs, so every public method uses the same check.
+Create the groups once at startup and keep one instance of each strategy. Reject blank group IDs before storing them. Each public method looks up its group directly and rejects an unknown ID.
 
 Python:
 
@@ -442,15 +412,9 @@ class SplitwiseService:
     def __init__(self, group_members):
         self._strategies = {"EQUAL": EqualSplitStrategy(), "EXACT": ExactSplitStrategy(),
                             "PERCENTAGE": PercentageSplitStrategy()}
-        for gid in group_members:
-            user_id(gid)
+        if any(not isinstance(gid, str) or not gid.strip() for gid in group_members):
+            raise ValueError("Invalid group ID")
         self._groups = {gid: Group(members) for gid, members in group_members.items()}
-
-    def _group(self, group_id):
-        user_id(group_id)
-        if group_id not in self._groups:
-            raise ValueError("Unknown group")
-        return self._groups[group_id]
 ```
 
 Java:
@@ -464,15 +428,11 @@ private final Map<String, Group> groups;
 
 public Splitwise(Map<String, List<String>> groupMembers) {
     Map<String, Group> built = new HashMap<>();
-    groupMembers.forEach((id, members) -> { validId(id); built.put(id, new Group(members)); });
+    groupMembers.forEach((id, members) -> {
+        if (id == null || id.isBlank()) throw new IllegalArgumentException("Invalid group ID");
+        built.put(id, new Group(members));
+    });
     groups = Map.copyOf(built);
-}
-
-private Group group(String id) {
-    validId(id);
-    var group = groups.get(id);
-    require(group != null, "Unknown group");
-    return group;
 }
 ```
 
@@ -480,15 +440,15 @@ The Java service class is named `Splitwise` in the runnable file. The methods be
 
 **Adding an expense.**
 
-Look up the group, check the payer ID and amount, and select the strategy. Unknown split types are rejected here. Pass the participants and values to Group along with the selected algorithm.
+Look up the group and select the strategy. Reject an unknown group or split type. Then pass the expense data to Group, which checks the payer, total, and participants before changing balances.
 
 Python:
 
 ```python
 def add_expense(self, group_id, payer, total, split_type, participants, values=None):
-    group = self._group(group_id)
-    user_id(payer)
-    integer(total, 1)
+    if not isinstance(group_id, str) or group_id not in self._groups:
+        raise ValueError("Unknown group")
+    group = self._groups[group_id]
     if not isinstance(split_type, str) or split_type not in self._strategies:
         raise ValueError("Unknown split type")
     strategy = self._strategies[split_type]
@@ -500,10 +460,9 @@ Java:
 ```java
 public Expense addExpense(String groupId, String payer, long total, String splitType,
                           List<String> participants, List<Long> values) {
-    var group = group(groupId);
-    validId(payer);
-    require(total > 0, "Positive total required");
-    require(splitType != null && strategies.containsKey(splitType), "Unknown split type");
+    Group group = groupId == null ? null : groups.get(groupId);
+    if (group == null) throw new IllegalArgumentException("Unknown group");
+    if (splitType == null || !strategies.containsKey(splitType)) throw new IllegalArgumentException("Unknown split type");
     return group.addExpense(payer, total, strategies.get(splitType), participants, values);
 }
 ```
@@ -518,30 +477,49 @@ Python:
 
 ```python
 def record_settlement(self, group_id, debtor, creditor, amount):
-    return self._group(group_id).record_settlement(debtor, creditor, amount)
+    if not isinstance(group_id, str) or group_id not in self._groups:
+        raise ValueError("Unknown group")
+    group = self._groups[group_id]
+    return group.record_settlement(debtor, creditor, amount)
 
 def get_balances(self, group_id):
-    return self._group(group_id).get_balances()
+    if not isinstance(group_id, str) or group_id not in self._groups:
+        raise ValueError("Unknown group")
+    group = self._groups[group_id]
+    return group.get_balances()
 
 def get_history(self, group_id):
-    return self._group(group_id).get_history()
+    if not isinstance(group_id, str) or group_id not in self._groups:
+        raise ValueError("Unknown group")
+    group = self._groups[group_id]
+    return group.get_history()
 ```
 
 Java:
 
 ```java
 public Settlement recordSettlement(String groupId, String debtor, String creditor, long amount) {
-    return group(groupId).recordSettlement(debtor, creditor, amount);
+    Group group = groupId == null ? null : groups.get(groupId);
+    if (group == null) throw new IllegalArgumentException("Unknown group");
+    return group.recordSettlement(debtor, creditor, amount);
 }
 
-public List<Debt> getBalances(String groupId) { return group(groupId).getBalances(); }
+public List<Debt> getBalances(String groupId) {
+    Group group = groupId == null ? null : groups.get(groupId);
+    if (group == null) throw new IllegalArgumentException("Unknown group");
+    return group.getBalances();
+}
 
-public List<Event> getHistory(String groupId) { return group(groupId).getHistory(); }
+public List<Event> getHistory(String groupId) {
+    Group group = groupId == null ? null : groups.get(groupId);
+    if (group == null) throw new IllegalArgumentException("Unknown group");
+    return group.getHistory();
+}
 ```
 
 ### SplitStrategy
 
-All three strategies implement `allocate(total, participants, values)` and return each participant's share in paise. Each class below implements that interface and keeps no expense data between calls.
+All three strategies implement `allocate(total, participants, values)` and return each participant's share in paise. Each class below implements that interface and keeps no expense data between calls. Input checks are written directly in each method, followed by the calculation.
 
 The interface gives every strategy the same inputs and output:
 
@@ -557,60 +535,6 @@ Java:
 ```java
 interface SplitStrategy {
     Map<String, Long> allocate(long total, List<String> participants, List<Long> values);
-}
-```
-
-**Preparing split inputs.**
-
-The `participant_ids` / `participantIds` helper copies the participant list. It checks that the list is nonempty and contains valid, unique IDs.
-
-The `split_values` / `splitValues` helper checks that every participant has one nonnegative integer value. It then builds a map from user ID to value. For participants `["A", "B"]` and values `[4000, 6000]`, the result is `{"A": 4000, "B": 6000}`. Checking the lengths first prevents a missing value from being silently dropped.
-
-
-Python:
-
-```python
-def participant_ids(participants):
-    if participants is None or isinstance(participants, (str, bytes)):
-        raise ValueError("Participant list required")
-    users = tuple(participants)
-    if not users:
-        raise ValueError("At least one participant is required")
-    for uid in users:
-        user_id(uid)
-    if len(set(users)) != len(users):
-        raise ValueError("Duplicate participant")
-    return users
-
-def split_values(users, values):
-    if values is None or isinstance(values, (str, bytes)):
-        raise ValueError("One value per participant required")
-    values = tuple(values)
-    if len(values) != len(users):
-        raise ValueError("One value per participant required")
-    for value in values:
-        integer(value)
-    return dict(zip(users, values))
-```
-
-Java:
-
-```java
-static List<String> participantIds(List<String> participants) {
-    require(participants != null && !participants.isEmpty(), "Participants required");
-    participants.forEach(Splitwise::validId);
-    var users = List.copyOf(participants);
-    require(new HashSet<>(users).size() == users.size(), "Duplicate participant");
-    return users;
-}
-
-static Map<String, Long> splitValues(List<String> users, List<Long> values) {
-    require(values != null && values.size() == users.size(), "One value per participant required");
-    for (Long value : values) require(value != null && value >= 0, "Invalid split value");
-    values = List.copyOf(values);
-    Map<String, Long> result = new HashMap<>();
-    for (int i = 0; i < users.size(); i++) result.put(users.get(i), values.get(i));
-    return result;
 }
 ```
 
@@ -635,8 +559,16 @@ Python:
 ```python
 class EqualSplitStrategy:
     def allocate(self, total, participants, values=None):
-        integer(total, 1)
-        users = sorted(participant_ids(participants))
+        if type(total) is not int or total < 1:
+            raise ValueError("Invalid amount")
+        if not isinstance(participants, (list, tuple)) or not participants:
+            raise ValueError("Participants required")
+        participants = tuple(participants)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
+            raise ValueError("Invalid participant ID")
+        if len(set(participants)) != len(participants):
+            raise ValueError("Duplicate participant")
+        users = sorted(participants)
         if values is not None:
             raise ValueError("Equal splits do not take values")
         base, remainder = divmod(total, len(users))
@@ -648,9 +580,16 @@ Java:
 ```java
 static final class EqualSplitStrategy implements SplitStrategy {
     public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-        require(total > 0, "Positive total required");
-        var sorted = new ArrayList<>(participantIds(participants));
-        require(values == null, "Equal splits do not take values");
+        if (total <= 0) throw new IllegalArgumentException("Positive total required");
+        if (participants == null || participants.isEmpty())
+            throw new IllegalArgumentException("Participants required");
+        if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
+            throw new IllegalArgumentException("Invalid participant ID");
+        participants = List.copyOf(participants);
+        if (new HashSet<>(participants).size() != participants.size())
+            throw new IllegalArgumentException("Duplicate participant");
+        var sorted = new ArrayList<>(participants);
+        if (values != null) throw new IllegalArgumentException("Equal splits do not take values");
         Collections.sort(sorted);
         long base = total / sorted.size(), remainder = total % sorted.size();
         Map<String, Long> result = new HashMap<>();
@@ -665,17 +604,29 @@ Do not silently turn a duplicated participant list into a set. If the input cont
 
 **ExactSplitStrategy.**
 
-For an exact split, the caller supplies each person’s amount. Build the user-to-amount map with the helper, add the amounts, and reject the request if the sum differs from the total. Return the map if it passes.
+For an exact split, the caller supplies each person’s amount. Check that participants are unique and each has one nonnegative amount. Build the user-to-amount map, add the amounts, and reject the request if the sum differs from the total. Return the map if it passes.
 
-For a 10,000-paise expense, `[4000, 6000]` is valid. `[4000, 5000]` is not. Zero shares are allowed, but negative shares are rejected by the helper. Java uses checked addition so an overflowing sum also fails.
+For a 10,000-paise expense, `[4000, 6000]` is valid. `[4000, 5000]` is not. Zero shares are allowed, but negative shares are rejected. Java uses checked addition so an overflowing sum also fails.
 
 Python:
 
 ```python
 class ExactSplitStrategy:
     def allocate(self, total, participants, values=None):
-        integer(total, 1)
-        amounts = split_values(participant_ids(participants), values)
+        if type(total) is not int or total < 1:
+            raise ValueError("Invalid amount")
+        if not isinstance(participants, (list, tuple)) or not participants:
+            raise ValueError("Participants required")
+        participants = tuple(participants)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
+            raise ValueError("Invalid participant ID")
+        if len(set(participants)) != len(participants):
+            raise ValueError("Duplicate participant")
+        if not isinstance(values, (list, tuple)) or len(values) != len(participants):
+            raise ValueError("One value per participant required")
+        if any(type(value) is not int or value < 0 for value in values):
+            raise ValueError("Shares must be nonnegative integers")
+        amounts = dict(zip(participants, values))
         if sum(amounts.values()) != total:
             raise ValueError("Shares must sum to the expense total")
         return amounts
@@ -686,11 +637,24 @@ Java:
 ```java
 static final class ExactSplitStrategy implements SplitStrategy {
     public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-        require(total > 0, "Positive total required");
-        var amounts = splitValues(participantIds(participants), values);
+        if (total <= 0) throw new IllegalArgumentException("Positive total required");
+        if (participants == null || participants.isEmpty())
+            throw new IllegalArgumentException("Participants required");
+        if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
+            throw new IllegalArgumentException("Invalid participant ID");
+        participants = List.copyOf(participants);
+        if (new HashSet<>(participants).size() != participants.size())
+            throw new IllegalArgumentException("Duplicate participant");
+        if (values == null || values.size() != participants.size())
+            throw new IllegalArgumentException("One value per participant required");
+        if (values.stream().anyMatch(value -> value == null || value < 0))
+            throw new IllegalArgumentException("Invalid split value");
+        Map<String, Long> amounts = new HashMap<>();
+        for (int i = 0; i < participants.size(); i++)
+            amounts.put(participants.get(i), values.get(i));
         long sum = 0;
         for (long amount : amounts.values()) sum = Math.addExact(sum, amount);
-        require(sum == total, "Shares must sum to total");
+        if (sum != total) throw new IllegalArgumentException("Shares must sum to total");
         return amounts;
     }
 }
@@ -712,7 +676,7 @@ For 101 paise split 33.33%, 33.33%, and 33.34%:
 
 The floors sum to 99. Two paise remain. C gets the first. A wins the tie for the second. Final shares are A=34, B=33, C=34.
 
-Before calculating, require a positive total and nonnegative weights that sum to 10000 basis points. The shared helpers reject missing values and duplicate users. A 0% share is valid. Java uses `BigInteger` for `total * weight` so that multiplication cannot overflow before we divide by 10000.
+Before calculating, require a positive total and nonnegative weights that sum to 10000 basis points. Check for missing values and duplicate participants before building the map. A 0% share is valid. Java uses `BigInteger` for `total * weight` so that multiplication cannot overflow before we divide by 10000.
 
 Python:
 
@@ -720,8 +684,20 @@ Python:
 class PercentageSplitStrategy:
     """Integer basis points: 10000 means 100 percent."""
     def allocate(self, total, participants, values=None):
-        integer(total, 1)
-        basis_points = split_values(participant_ids(participants), values)
+        if type(total) is not int or total < 1:
+            raise ValueError("Invalid amount")
+        if not isinstance(participants, (list, tuple)) or not participants:
+            raise ValueError("Participants required")
+        participants = tuple(participants)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
+            raise ValueError("Invalid participant ID")
+        if len(set(participants)) != len(participants):
+            raise ValueError("Duplicate participant")
+        if not isinstance(values, (list, tuple)) or len(values) != len(participants):
+            raise ValueError("One value per participant required")
+        if any(type(value) is not int or value < 0 for value in values):
+            raise ValueError("Shares must be nonnegative integers")
+        basis_points = dict(zip(participants, values))
         if sum(basis_points.values()) != 10000:
             raise ValueError("Percentages must sum to 10000 basis points")
         shares, fractions = {}, {}
@@ -739,14 +715,27 @@ Java:
 ```java
 static final class PercentageSplitStrategy implements SplitStrategy {
     public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-        require(total > 0, "Positive total required");
-        var bps = splitValues(participantIds(participants), values);
+        if (total <= 0) throw new IllegalArgumentException("Positive total required");
+        if (participants == null || participants.isEmpty())
+            throw new IllegalArgumentException("Participants required");
+        if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
+            throw new IllegalArgumentException("Invalid participant ID");
+        participants = List.copyOf(participants);
+        if (new HashSet<>(participants).size() != participants.size())
+            throw new IllegalArgumentException("Duplicate participant");
+        if (values == null || values.size() != participants.size())
+            throw new IllegalArgumentException("One value per participant required");
+        if (values.stream().anyMatch(value -> value == null || value < 0))
+            throw new IllegalArgumentException("Invalid split value");
+        Map<String, Long> bps = new HashMap<>();
+        for (int i = 0; i < participants.size(); i++)
+            bps.put(participants.get(i), values.get(i));
         long sum = 0;
         for (long weight : bps.values()) {
-            require(weight <= 10000, "Invalid percentage");
+            if (weight > 10000) throw new IllegalArgumentException("Invalid percentage");
             sum += weight;
         }
-        require(sum == 10000, "Percentages must sum to 10000 basis points");
+        if (sum != 10000) throw new IllegalArgumentException("Percentages must sum to 10000 basis points");
         Map<String, Long> shares = new HashMap<>();
         Map<String, Long> fractions = new HashMap<>();
         long allocated = 0;
@@ -802,34 +791,27 @@ An expense may change several pairs and history together. A group lock keeps tho
 
 We could use a lock for each pair of users. But one expense might then need several locks, acquired in a fixed order to avoid deadlocks. We would also need to coordinate history updates and reads. Start with one group lock. Consider smaller locks only if measurements show that waiting on the group lock is a problem.
 
-**Constructor and membership checks.**
+**Constructor.**
 
 A group starts with fixed members, no debts, and an empty history. Reject an empty member list, invalid IDs, and duplicate members. Copy the IDs so later changes to the caller’s list cannot change membership. Each group owns its lock.
 
-The membership helper checks that each supplied ID belongs to this group. Expense creation and settlement call it before changing any balances.
+Expense creation and settlement check membership directly before changing any balances.
 
 Python:
 
 ```python
 class Group:
     def __init__(self, members):
-        members = tuple(members)
-        if not members:
+        if not isinstance(members, (list, tuple)) or not members:
             raise ValueError("Group must have members")
-        for uid in members:
-            user_id(uid)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in members):
+            raise ValueError("Invalid member ID")
         if len(set(members)) != len(members):
             raise ValueError("Duplicate group member")
         self._members = frozenset(members)
         self._balances = {}  # (lower ID, higher ID) -> signed minor units
         self._history = []
         self._lock = Lock()
-
-    def _require_members(self, *users):
-        for uid in users:
-            user_id(uid)
-            if uid not in self._members:
-                raise ValueError(f"Unknown group member: {uid}")
 ```
 
 Java:
@@ -841,15 +823,12 @@ private final List<Event> history = new ArrayList<>();
 private final Object lock = new Object();
 
 public Group(List<String> users) {
-    require(!users.isEmpty(), "Group members required");
-    users.forEach(Splitwise::validId);
+    if (users == null || users.isEmpty())
+        throw new IllegalArgumentException("Group members required");
+    if (users.stream().anyMatch(id -> id == null || id.isBlank()))
+        throw new IllegalArgumentException("Invalid member ID");
     members = Set.copyOf(users);
-    require(members.size() == users.size(), "Duplicate member");
-}
-
-private void member(String user) {
-    validId(user);
-    require(members.contains(user), "Unknown group member");
+    if (members.size() != users.size()) throw new IllegalArgumentException("Duplicate member");
 }
 ```
 
@@ -917,10 +896,19 @@ Python:
 
 ```python
 def add_expense(self, payer, total, strategy: SplitStrategy, participants, values=None):
-    integer(total, 1)
-    self._require_members(payer)
-    participants = participant_ids(participants)
-    self._require_members(*participants)
+    if type(total) is not int or total < 1:
+        raise ValueError("Invalid amount")
+    if not isinstance(payer, str) or payer not in self._members:
+        raise ValueError("Unknown payer")
+    if not isinstance(participants, (list, tuple)) or not participants:
+        raise ValueError("Participants required")
+    participants = tuple(participants)
+    if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
+        raise ValueError("Invalid participant ID")
+    if len(set(participants)) != len(participants):
+        raise ValueError("Duplicate participant")
+    if not self._members.issuperset(participants):
+        raise ValueError("Unknown group participant")
     values = tuple(values) if values is not None else None
     # Expense inputs are local snapshots; strategies retain no per-call state.
     shares = dict(strategy.allocate(total, participants, values))
@@ -928,9 +916,9 @@ def add_expense(self, payer, total, strategy: SplitStrategy, participants, value
         raise ValueError("Allocation must contain exactly the participants")
     if not shares:
         raise ValueError("At least one participant is required")
-    self._require_members(*shares)
     for amount in shares.values():
-        integer(amount)
+        if type(amount) is not int or amount < 0:
+            raise ValueError("Invalid amount")
     if sum(shares.values()) != total:
         raise ValueError("Invalid strategy result")
 
@@ -951,21 +939,28 @@ Java:
 ```java
 public Expense addExpense(String payer, long total, SplitStrategy strategy,
                           List<String> participants, List<Long> values) {
-    require(total > 0, "Positive total required");
-    member(payer);
-    participants = participantIds(participants);
-    participants.forEach(this::member);
+    if (total <= 0) throw new IllegalArgumentException("Positive total required");
+    if (payer == null || !members.contains(payer))
+        throw new IllegalArgumentException("Unknown payer");
+    if (participants == null || participants.isEmpty())
+        throw new IllegalArgumentException("Participants required");
+    if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
+        throw new IllegalArgumentException("Invalid participant ID");
+    participants = List.copyOf(participants);
+    if (new HashSet<>(participants).size() != participants.size())
+        throw new IllegalArgumentException("Duplicate participant");
+    if (!members.containsAll(participants))
+        throw new IllegalArgumentException("Unknown group participant");
     values = values == null ? null : new ArrayList<>(values);
     var shares = Map.copyOf(strategy.allocate(total, participants, values));
-    require(shares.keySet().equals(new HashSet<>(participants)), "Allocation must contain exactly the participants");
-    require(!shares.isEmpty(), "Participants required");
+    if (!shares.keySet().equals(new HashSet<>(participants))) throw new IllegalArgumentException("Allocation must contain exactly the participants");
+    if (shares.isEmpty()) throw new IllegalArgumentException("Participants required");
     long sum = 0;
     for (var entry : shares.entrySet()) {
-        member(entry.getKey());
-        require(entry.getValue() >= 0, "Negative share");
+        if (entry.getValue() < 0) throw new IllegalArgumentException("Negative share");
         sum = Math.addExact(sum, entry.getValue());
     }
-    require(sum == total, "Invalid strategy result");
+    if (sum != total) throw new IllegalArgumentException("Invalid strategy result");
     var expense = new Expense(UUID.randomUUID().toString(), payer, total, shares);
     synchronized (lock) {
         Map<Pair, Long> pending = new HashMap<>();
@@ -973,7 +968,7 @@ public Expense addExpense(String payer, long total, SplitStrategy strategy,
             if (entry.getKey().equals(payer) || entry.getValue() == 0) continue;
             var d = delta(entry.getKey(), payer, entry.getValue());
             long next = Math.addExact(balances.getOrDefault(d.pair(), 0L), d.value());
-            require(next != Long.MIN_VALUE, "Balance magnitude exceeds supported range");
+            if (next == Long.MIN_VALUE) throw new IllegalArgumentException("Balance magnitude exceeds supported range");
             pending.put(d.pair(), next);
         }
         commit(pending, expense);
@@ -1050,8 +1045,10 @@ Python:
 
 ```python
 def record_settlement(self, debtor, creditor, amount):
-    integer(amount, 1)
-    self._require_members(debtor, creditor)
+    if type(amount) is not int or amount < 1:
+        raise ValueError("Invalid amount")
+    if any(not isinstance(uid, str) or uid not in self._members for uid in (debtor, creditor)):
+        raise ValueError("Unknown group member")
     if debtor == creditor:
         raise ValueError("Cannot settle with yourself")
     pair, direction = self._delta(debtor, creditor, 1)
@@ -1070,15 +1067,16 @@ Java:
 
 ```java
 public Settlement recordSettlement(String debtor, String creditor, long amount) {
-    require(amount > 0, "Positive settlement required");
-    member(debtor); member(creditor);
-    require(!debtor.equals(creditor), "Cannot settle with yourself");
+    if (amount <= 0) throw new IllegalArgumentException("Positive settlement required");
+    if (debtor == null || creditor == null || !members.contains(debtor) || !members.contains(creditor))
+        throw new IllegalArgumentException("Unknown group member");
+    if (debtor.equals(creditor)) throw new IllegalArgumentException("Cannot settle with yourself");
     var d = delta(debtor, creditor, 1);
     var event = new Settlement(UUID.randomUUID().toString(), debtor, creditor, amount);
     synchronized (lock) {
         long balance = balances.getOrDefault(d.pair(), 0L);
         long outstanding = d.value() * balance;
-        require(amount <= outstanding, "Settlement exceeds debt in this direction");
+        if (amount > outstanding) throw new IllegalArgumentException("Settlement exceeds debt in this direction");
         commit(Map.of(d.pair(), balance - d.value() * amount), event);
     }
     return event;

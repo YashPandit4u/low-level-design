@@ -7,48 +7,22 @@ from typing import Protocol
 from uuid import uuid4
 
 
-def integer(value, minimum=0):
-    if type(value) is not int or value < minimum:
-        raise ValueError(f"Expected an integer >= {minimum}")
-
-
-def user_id(value):
-    if not isinstance(value, str) or not value.strip() or not value.isascii():
-        raise ValueError("ID must be a nonempty ASCII string")
-
-
-def participant_ids(participants):
-    if participants is None or isinstance(participants, (str, bytes)):
-        raise ValueError("Participant list required")
-    users = tuple(participants)
-    if not users:
-        raise ValueError("At least one participant is required")
-    for uid in users:
-        user_id(uid)
-    if len(set(users)) != len(users):
-        raise ValueError("Duplicate participant")
-    return users
-
-
-def split_values(users, values):
-    if values is None or isinstance(values, (str, bytes)):
-        raise ValueError("One value per participant required")
-    values = tuple(values)
-    if len(values) != len(users):
-        raise ValueError("One value per participant required")
-    for value in values:
-        integer(value)
-    return dict(zip(users, values))
-
-
 class SplitStrategy(Protocol):
     def allocate(self, total: int, participants, values=None) -> dict[str, int]: ...
 
 
 class EqualSplitStrategy:
     def allocate(self, total, participants, values=None):
-        integer(total, 1)
-        users = sorted(participant_ids(participants))
+        if type(total) is not int or total < 1:
+            raise ValueError("Invalid amount")
+        if not isinstance(participants, (list, tuple)) or not participants:
+            raise ValueError("Participants required")
+        participants = tuple(participants)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
+            raise ValueError("Invalid participant ID")
+        if len(set(participants)) != len(participants):
+            raise ValueError("Duplicate participant")
+        users = sorted(participants)
         if values is not None:
             raise ValueError("Equal splits do not take values")
         base, remainder = divmod(total, len(users))
@@ -57,8 +31,20 @@ class EqualSplitStrategy:
 
 class ExactSplitStrategy:
     def allocate(self, total, participants, values=None):
-        integer(total, 1)
-        amounts = split_values(participant_ids(participants), values)
+        if type(total) is not int or total < 1:
+            raise ValueError("Invalid amount")
+        if not isinstance(participants, (list, tuple)) or not participants:
+            raise ValueError("Participants required")
+        participants = tuple(participants)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
+            raise ValueError("Invalid participant ID")
+        if len(set(participants)) != len(participants):
+            raise ValueError("Duplicate participant")
+        if not isinstance(values, (list, tuple)) or len(values) != len(participants):
+            raise ValueError("One value per participant required")
+        if any(type(value) is not int or value < 0 for value in values):
+            raise ValueError("Shares must be nonnegative integers")
+        amounts = dict(zip(participants, values))
         if sum(amounts.values()) != total:
             raise ValueError("Shares must sum to the expense total")
         return amounts
@@ -67,8 +53,20 @@ class ExactSplitStrategy:
 class PercentageSplitStrategy:
     """Integer basis points: 10000 means 100 percent."""
     def allocate(self, total, participants, values=None):
-        integer(total, 1)
-        basis_points = split_values(participant_ids(participants), values)
+        if type(total) is not int or total < 1:
+            raise ValueError("Invalid amount")
+        if not isinstance(participants, (list, tuple)) or not participants:
+            raise ValueError("Participants required")
+        participants = tuple(participants)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
+            raise ValueError("Invalid participant ID")
+        if len(set(participants)) != len(participants):
+            raise ValueError("Duplicate participant")
+        if not isinstance(values, (list, tuple)) or len(values) != len(participants):
+            raise ValueError("One value per participant required")
+        if any(type(value) is not int or value < 0 for value in values):
+            raise ValueError("Shares must be nonnegative integers")
+        basis_points = dict(zip(participants, values))
         if sum(basis_points.values()) != 10000:
             raise ValueError("Percentages must sum to 10000 basis points")
         shares, fractions = {}, {}
@@ -106,23 +104,16 @@ class Debt:
 
 class Group:
     def __init__(self, members):
-        members = tuple(members)
-        if not members:
+        if not isinstance(members, (list, tuple)) or not members:
             raise ValueError("Group must have members")
-        for uid in members:
-            user_id(uid)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in members):
+            raise ValueError("Invalid member ID")
         if len(set(members)) != len(members):
             raise ValueError("Duplicate group member")
         self._members = frozenset(members)
         self._balances = {}  # (lower ID, higher ID) -> signed minor units
         self._history = []
         self._lock = Lock()
-
-    def _require_members(self, *users):
-        for uid in users:
-            user_id(uid)
-            if uid not in self._members:
-                raise ValueError(f"Unknown group member: {uid}")
 
     @staticmethod
     def _delta(debtor, creditor, amount):
@@ -131,10 +122,19 @@ class Group:
         return (creditor, debtor), -amount
 
     def add_expense(self, payer, total, strategy: SplitStrategy, participants, values=None):
-        integer(total, 1)
-        self._require_members(payer)
-        participants = participant_ids(participants)
-        self._require_members(*participants)
+        if type(total) is not int or total < 1:
+            raise ValueError("Invalid amount")
+        if not isinstance(payer, str) or payer not in self._members:
+            raise ValueError("Unknown payer")
+        if not isinstance(participants, (list, tuple)) or not participants:
+            raise ValueError("Participants required")
+        participants = tuple(participants)
+        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
+            raise ValueError("Invalid participant ID")
+        if len(set(participants)) != len(participants):
+            raise ValueError("Duplicate participant")
+        if not self._members.issuperset(participants):
+            raise ValueError("Unknown group participant")
         values = tuple(values) if values is not None else None
         # Expense inputs are local snapshots; strategies retain no per-call state.
         shares = dict(strategy.allocate(total, participants, values))
@@ -142,9 +142,9 @@ class Group:
             raise ValueError("Allocation must contain exactly the participants")
         if not shares:
             raise ValueError("At least one participant is required")
-        self._require_members(*shares)
         for amount in shares.values():
-            integer(amount)
+            if type(amount) is not int or amount < 0:
+                raise ValueError("Invalid amount")
         if sum(shares.values()) != total:
             raise ValueError("Invalid strategy result")
 
@@ -160,8 +160,10 @@ class Group:
         return expense
 
     def record_settlement(self, debtor, creditor, amount):
-        integer(amount, 1)
-        self._require_members(debtor, creditor)
+        if type(amount) is not int or amount < 1:
+            raise ValueError("Invalid amount")
+        if any(not isinstance(uid, str) or uid not in self._members for uid in (debtor, creditor)):
+            raise ValueError("Unknown group member")
         if debtor == creditor:
             raise ValueError("Cannot settle with yourself")
         pair, direction = self._delta(debtor, creditor, 1)
@@ -200,30 +202,33 @@ class SplitwiseService:
     def __init__(self, group_members):
         self._strategies = {"EQUAL": EqualSplitStrategy(), "EXACT": ExactSplitStrategy(),
                             "PERCENTAGE": PercentageSplitStrategy()}
-        for gid in group_members:
-            user_id(gid)
+        if any(not isinstance(gid, str) or not gid.strip() for gid in group_members):
+            raise ValueError("Invalid group ID")
         self._groups = {gid: Group(members) for gid, members in group_members.items()}
 
-    def _group(self, group_id):
-        user_id(group_id)
-        if group_id not in self._groups:
-            raise ValueError("Unknown group")
-        return self._groups[group_id]
-
     def add_expense(self, group_id, payer, total, split_type, participants, values=None):
-        group = self._group(group_id)
-        user_id(payer)
-        integer(total, 1)
+        if not isinstance(group_id, str) or group_id not in self._groups:
+            raise ValueError("Unknown group")
+        group = self._groups[group_id]
         if not isinstance(split_type, str) or split_type not in self._strategies:
             raise ValueError("Unknown split type")
         strategy = self._strategies[split_type]
         return group.add_expense(payer, total, strategy, participants, values)
 
     def record_settlement(self, group_id, debtor, creditor, amount):
-        return self._group(group_id).record_settlement(debtor, creditor, amount)
+        if not isinstance(group_id, str) or group_id not in self._groups:
+            raise ValueError("Unknown group")
+        group = self._groups[group_id]
+        return group.record_settlement(debtor, creditor, amount)
 
     def get_balances(self, group_id):
-        return self._group(group_id).get_balances()
+        if not isinstance(group_id, str) or group_id not in self._groups:
+            raise ValueError("Unknown group")
+        group = self._groups[group_id]
+        return group.get_balances()
 
     def get_history(self, group_id):
-        return self._group(group_id).get_history()
+        if not isinstance(group_id, str) or group_id not in self._groups:
+            raise ValueError("Unknown group")
+        group = self._groups[group_id]
+        return group.get_history()
