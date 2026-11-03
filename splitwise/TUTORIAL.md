@@ -119,9 +119,18 @@ We could instead sort the IDs and encode direction using a positive or negative 
 ### Expense and Debt
 
 ```text
-Expense(payer, total, sharesByUser)
-Debt(debtor, creditor, amount)
+Expense
+  payer: String                    // user ID of the person who paid
+  total: long                      // positive amount in paise
+  sharesByUser: Map<String, long>   // participant user ID → share in paise
+
+Debt
+  debtor: String                   // user ID of the person who owes money
+  creditor: String                 // user ID of the person owed money
+  amount: long                     // positive outstanding amount, in paise
 ```
+
+IDs are strings, not User objects. Java uses `long` for money and `Map<String, Long>` for shares; Python uses `int` and a mapping from user IDs to amounts. For example, `{"A": 5000, "B": 5000}` splits ₹100 equally. Shares may be zero and must sum to the total.
 
 Treat these as immutable results. Copy the allocation when constructing Expense, and return fresh Debt records when listing balances. Callers should not be able to change group state by editing a returned collection.
 

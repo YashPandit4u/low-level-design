@@ -178,9 +178,17 @@ Out of scope initially:
 
 
 <h3 id="expense-and-debt">Expense and Debt<a aria-label="Link to Expense and Debt" class="heading-anchor" href="#expense-and-debt">#</a></h3>
-<div class="codebox"><div class="codebar"><span class="code-title">Expense and Debt</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Expense(payer, total, sharesByUser)
-Debt(debtor, creditor, amount)
+<div class="codebox"><div class="codebar"><span class="code-title">Expense and Debt</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Expense
+  payer: String                    // user ID of the person who paid
+  total: long                      // positive amount in paise
+  sharesByUser: Map&lt;String, long&gt;   // participant user ID → share in paise
+
+Debt
+  debtor: String                   // user ID of the person who owes money
+  creditor: String                 // user ID of the person owed money
+  amount: long                     // positive outstanding amount, in paise
 </code></pre></div>
+<p>IDs are strings, not User objects. Java uses <code>long</code> for money and <code>Map&lt;String, Long&gt;</code> for shares; Python uses <code>int</code> and a mapping from user IDs to amounts. For example, <code>{"A": 5000, "B": 5000}</code> splits ₹100 equally. Shares may be zero and must sum to the total.</p>
 <p>Treat these as immutable results. Copy the allocation when constructing Expense, and return fresh Debt records when listing balances. Callers should not be able to change group state by editing a returned collection.</p>
 <p>Expense doesn't need a <code>settle()</code> method. Ben's current debt might combine dinner, breakfast, and several payments. The group knows that combined amount; one expense does not.</p>
 <h3 id="final-class-design">Final Class Design<a aria-label="Link to Final Class Design" class="heading-anchor" href="#final-class-design">#</a></h3>

@@ -340,11 +340,26 @@ PercentageSplitStrategy()
 <p>We'll use separate strategies because allocation is a meaningful behavior to test independently. The cost is three small classes and a service-side lookup. A small lookup is enough; a separate factory hierarchy would add little for three modes. Group accepts the resulting strategy internally, while clients only submit split data.</p>
 <p>Group still validates the returned allocation. It knows membership; the strategy doesn't. It also verifies that shares are nonnegative integers and sum to the total. A new strategy must not be able to create money by returning invalid shares.</p>
 <h3 id="expense-settlement-and-debt">Expense, Settlement, and Debt<a aria-label="Link to Expense, Settlement, and Debt" class="heading-anchor" href="#expense-settlement-and-debt">#</a></h3>
-<div class="codebox"><div class="codebar"><span class="code-title">Expense, Settlement, and Debt</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Expense(id, payer, total, sharesByUser)
-Settlement(id, debtor, creditor, amount)
-Debt(debtor, creditor, amount)
+<div class="codebox"><div class="codebar"><span class="code-title">Expense, Settlement, and Debt</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Expense
+  id: String                       // unique expense ID
+  payer: String                    // user ID of the person who paid
+  total: long                      // positive amount in paise
+  sharesByUser: Map&lt;String, long&gt;   // participant user ID → share in paise
+
+Settlement
+  id: String                       // unique settlement ID
+  debtor: String                   // user ID of the person paying back
+  creditor: String                 // user ID of the person receiving payment
+  amount: long                     // positive amount repaid, in paise
+
+Debt
+  debtor: String                   // user ID of the person who owes money
+  creditor: String                 // user ID of the person owed money
+  amount: long                     // positive outstanding amount, in paise
 </code></pre></div>
-<p>All three are immutable. Expense makes a defensive copy of its shares. Returning an immutable object that contains a mutable map would not be sufficient.</p>
+<p>These are field definitions, not additional wrapper classes. IDs are strings, not User objects. <code>long</code> means a 64-bit integer in Java; Python uses <code>int</code>. The map becomes <code>Map&lt;String, Long&gt;</code> in Java, since generics require the boxed type.</p>
+<p>For example, an expense paid by A with <code>total = 90000</code> and <code>sharesByUser = {"A": 30000, "B": 30000, "C": 30000}</code> records a ₹900 bill split three ways. Shares include the payer when they participate, may be zero, and must sum to the total.</p>
+<p>All three are immutable. Expense makes a defensive copy of its shares. The Python implementation stores the allocation as an immutable tuple of <code>(user_id, amount)</code> pairs; Java uses an unmodifiable map. Returning an immutable object that contains a mutable map would not be sufficient.</p>
 <p>Why store final amounts instead of just percentages? Because the expense needs an exact, stable allocation. If our rounding policy changes next month, last month's dinner must not quietly shift a paise between friends.</p>
 <p>Why no <code>settle()</code> method on Expense? A settlement applies to the current net debt between two people. That debt may come from several expenses in both directions. Group has that information; one Expense does not.</p>
 <h3 id="final-class-design">Final Class Design<a aria-label="Link to Final Class Design" class="heading-anchor" href="#final-class-design">#</a></h3>
@@ -374,9 +389,11 @@ SplitStrategy.allocate(total, participants, values) -&gt; Map&lt;UserId, paise&g
   PercentageSplitStrategy()
 
 Event = Expense | Settlement
-Expense(id, payer, total, immutable sharesByUser)
-Settlement(id, debtor, creditor, amount)
-Debt(debtor, creditor, positive amount)
+Expense(id: String, payer: String, total: long,
+        sharesByUser: immutable Map&lt;String, long&gt;)
+Settlement(id: String, debtor: String, creditor: String, amount: long)
+Debt(debtor: String, creditor: String, amount: long)
+// All monetary values are integer paise; totals and settlement/debt amounts are positive.
 </code></pre></div>
 <p>The key invariants are worth saying aloud before implementing:</p>
 <ol>

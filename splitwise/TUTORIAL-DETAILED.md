@@ -289,12 +289,29 @@ Group still validates the returned allocation. It knows membership; the strategy
 ### Expense, Settlement, and Debt
 
 ```text
-Expense(id, payer, total, sharesByUser)
-Settlement(id, debtor, creditor, amount)
-Debt(debtor, creditor, amount)
+Expense
+  id: String                       // unique expense ID
+  payer: String                    // user ID of the person who paid
+  total: long                      // positive amount in paise
+  sharesByUser: Map<String, long>   // participant user ID → share in paise
+
+Settlement
+  id: String                       // unique settlement ID
+  debtor: String                   // user ID of the person paying back
+  creditor: String                 // user ID of the person receiving payment
+  amount: long                     // positive amount repaid, in paise
+
+Debt
+  debtor: String                   // user ID of the person who owes money
+  creditor: String                 // user ID of the person owed money
+  amount: long                     // positive outstanding amount, in paise
 ```
 
-All three are immutable. Expense makes a defensive copy of its shares. Returning an immutable object that contains a mutable map would not be sufficient.
+These are field definitions, not additional wrapper classes. IDs are strings, not User objects. `long` means a 64-bit integer in Java; Python uses `int`. The map becomes `Map<String, Long>` in Java, since generics require the boxed type.
+
+For example, an expense paid by A with `total = 90000` and `sharesByUser = {"A": 30000, "B": 30000, "C": 30000}` records a ₹900 bill split three ways. Shares include the payer when they participate, may be zero, and must sum to the total.
+
+All three are immutable. Expense makes a defensive copy of its shares. The Python implementation stores the allocation as an immutable tuple of `(user_id, amount)` pairs; Java uses an unmodifiable map. Returning an immutable object that contains a mutable map would not be sufficient.
 
 Why store final amounts instead of just percentages? Because the expense needs an exact, stable allocation. If our rounding policy changes next month, last month's dinner must not quietly shift a paise between friends.
 
@@ -330,9 +347,11 @@ SplitStrategy.allocate(total, participants, values) -> Map<UserId, paise>
   PercentageSplitStrategy()
 
 Event = Expense | Settlement
-Expense(id, payer, total, immutable sharesByUser)
-Settlement(id, debtor, creditor, amount)
-Debt(debtor, creditor, positive amount)
+Expense(id: String, payer: String, total: long,
+        sharesByUser: immutable Map<String, long>)
+Settlement(id: String, debtor: String, creditor: String, amount: long)
+Debt(debtor: String, creditor: String, amount: long)
+// All monetary values are integer paise; totals and settlement/debt amounts are positive.
 ```
 
 The key invariants are worth saying aloud before implementing:
