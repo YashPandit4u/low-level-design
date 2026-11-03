@@ -390,6 +390,10 @@ Group.addExpense(payer, total, strategy):
     apply each nonpayer share using addDebt
 ```
 
+The client still sends data. Add `AddExpenseRequest(groupId, payerId, amount, split)`, where `split` is `EqualSplitInput`, `ExactSplitInput`, or `PercentageSplitInput`. The service selects the internal strategy with a small switch; only Group receives that strategy. Map keys identify participants for exact and percentage inputs, avoiding a duplicate participant list. Copy input collections and reject unsupported variants before changing state.
+
+An HTTP adapter would decode the split type, reject malformed fields and duplicate map keys, authenticate the caller, and check group access. Membership checks alone do not authorize someone to add an expense or claim a settlement. The executable references implement the in-process service boundary, not an HTTP server.
+
 Now Strategy has a purpose: several calculations share one output contract. A switch in an allocation helper would also work for a fixed set of modes. Separate strategies become useful when we want to test and extend each rule independently.
 
 For **exact amounts**, require a nonempty allocation, nonnegative integer shares, and a sum equal to the total. Copy the accepted allocation. Group checks that every participant belongs to it.

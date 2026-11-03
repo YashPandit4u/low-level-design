@@ -102,11 +102,11 @@ Let's consider the nouns before turning them into classes.
 
 **Balance.** A balance is a changing relationship between two users. We need a representation, but we don't necessarily need a mutable Balance object with its own lifecycle. We'll decide on the data structure during class design. A returned Debt record will keep the public API readable.
 
-**SplitwiseService.** Callers provide a group ID. Something needs to find that group and route the operation. This is our small application-level entry point. It doesn't calculate individual shares or hold every group's lock.
+**SplitwiseService.** Callers submit expense data and a group ID. This application-level entry point selects a split strategy and routes the operation to that group. It doesn't calculate individual shares or hold every group's lock.
 
 | Entity | Responsibility |
 | --- | --- |
-| SplitwiseService | Route public operations to the requested group. |
+| SplitwiseService | Accept request data, select a split strategy, and route operations to the group. |
 | Group | Own membership, history, current debt state, and synchronization. |
 | SplitStrategy | Calculate a valid allocation without changing group state. |
 | Expense | Preserve payer, total, and the final per-person allocation. |
@@ -122,8 +122,9 @@ SplitwiseService
                           ├── current pair balances
                           └── history: Expense or Settlement
 
-addExpense receives a SplitStrategy
-  └── produces participant ID → share in paise
+Client sends AddExpenseRequest with split input data
+  └── SplitwiseService selects an internal SplitStrategy
+        └── Group uses it to produce participant ID → share in paise
 ```
 
 The strategy is used for one calculation. The resulting Expense stores the amounts, not a mutable strategy that might produce different amounts later.
@@ -137,7 +138,7 @@ We'll start at the public API, then work down to the object that actually owns t
 | Requirement | State or operation |
 | --- | --- |
 | Multiple configured groups | A map from group ID to Group. |
-| Add expenses | `addExpense(groupId, payer, total, strategy)`. |
+| Add expenses | `addExpense(request: AddExpenseRequest)`. |
 | Record settlements | `recordSettlement(groupId, debtor, creditor, amount)`. |
 | View balances and history | `getBalances(groupId)` and `getHistory(groupId)`. |
 
@@ -145,13 +146,43 @@ We'll start at the public API, then work down to the object that actually owns t
 class SplitwiseService:
     - groups: Map<GroupId, Group>       // fixed after construction
 
-    + addExpense(groupId, payer, total, strategy) -> Expense
+    + addExpense(request: AddExpenseRequest) -> Expense
     + recordSettlement(groupId, debtor, creditor, amount) -> Settlement
     + getBalances(groupId) -> List<Debt>
     + getHistory(groupId) -> List<Expense | Settlement>
 ```
 
-Unknown groups produce a clear validation error. Everything else delegates to Group. A service method that merely performs a lookup is fine; we don't need to give it extra responsibilities to make it look important.
+The caller chooses how to split an expense, not which implementation class to instantiate. Our service accepts a data transfer object (DTO):
+
+```text
+AddExpenseRequest(groupId, payerId, amount, split)
+    amount: integer paise
+    split: exactly one of
+        EqualSplitInput(participants)
+        ExactSplitInput(amountsByUser)
+        PercentageSplitInput(basisPointsByUser)
+```
+
+These inputs carry data; they have no `allocate` method. Equal splits need a participant list. For exact and percentage splits, the map keys are the participants, so we don't send a second list that could disagree with them. Distinct input types also make the units clear: amounts are paise, percentages are basis points.
+
+An HTTP client could send the same information as JSON:
+
+```json
+{
+  "groupId": "trip",
+  "payerId": "A",
+  "amount": 90000,
+  "split": {"type": "EQUAL", "participants": ["A", "B", "C"]}
+}
+```
+
+A thin HTTP adapter would decode `type` into the matching input DTO. It must reject unknown types, missing or conflicting fields, fractional monetary values, and duplicate keys before creating maps. For `EXACT`, use `amountsByUser`; for `PERCENTAGE`, use `basisPointsByUser`. Don't accept a class name or executable strategy from the client. We won't implement an HTTP server here.
+
+The service validates the request envelope, finds the group, and selects the strategy. The strategy validates allocation rules; Group enforces membership and ledger invariants. Unknown groups and invalid requests fail before any mutation. Input collections are copied so later caller changes cannot alter an accepted request. IDs must be nonempty ASCII strings throughout the service, matching our deterministic ordering rule.
+
+**Membership isn't authorization.** In a hosted application, the adapter must authenticate the caller and check permission to read or change the requested group. A supplied `payerId` or `debtorId` is business data, not proof of identity. For settlements, it records a claimed external payment, not bank-confirmed payment. These access policies remain outside this in-memory exercise.
+
+Results stay detached, immutable data records. An HTTP adapter serializes those records and maps validation failures to client errors; it must not return Group objects, locks, strategy objects, or raw exception traces. The Python and Java references below implement the application boundary, not the transport layer.
 
 ### Group and balance representation
 
@@ -264,7 +295,7 @@ PercentageSplit(basisPointsByUser)
 
 Each strategy copies its configuration when constructed and performs a pure calculation. EqualSplit holds participant IDs. ExactSplit holds proposed amounts. PercentageSplit holds percentages in basis points: `2500` means 25.00%, and `10000` means 100%.
 
-We'll use separate strategies because allocation is a meaningful behavior to test independently. The cost is three small classes and a caller that must select one. We don't need a factory hierarchy to make that choice; translating an external request into a strategy can remain a small boundary function.
+We'll use separate strategies because allocation is a meaningful behavior to test independently. The cost is three small classes and a service-side selection branch. A small switch or type check is enough; a separate factory hierarchy would add little for three modes. Group accepts the resulting strategy internally, while clients only submit split data.
 
 Group still validates the returned allocation. It knows membership; the strategy doesn't. It also verifies that shares are nonnegative integers and sum to the total. A new strategy must not be able to create money by returning invalid shares.
 
@@ -284,12 +315,15 @@ Why no `settle()` method on Expense? A settlement applies to the current net deb
 
 ### Final class design
 
-Here's the design assembled in one place. Follow an expense from the service down: the service finds its group, the group asks a strategy for shares, and the group records the resulting debt changes.
+Here's the design assembled in one place. Follow an expense from the service down: the service validates the request and selects a strategy, the group asks that strategy for shares, and the group records the resulting debt changes.
 
 ```text
+AddExpenseRequest(groupId, payerId, amount, splitInput)
+SplitInput = EqualSplitInput | ExactSplitInput | PercentageSplitInput
+
 SplitwiseService
   groups: Map<GroupId, Group>
-  addExpense(groupId, payer, total, strategy) -> Expense
+  addExpense(request: AddExpenseRequest) -> Expense
   recordSettlement(groupId, debtor, creditor, amount) -> Settlement
   getBalances(groupId) -> List<Debt>
   getHistory(groupId) -> List<Event>
@@ -328,13 +362,15 @@ Those statements give us a concrete standard for deciding whether the code is co
 
 ## Implementation
 
-Start by getting one equal expense all the way through the system. Then add exact and percentage allocation, followed by settlement. That gives you a working flow before spending time on the trickiest rounding rule. Service delegation and record definitions can be sketched; allocation and atomic debt updates deserve the implementation time.
+Start by getting one equal expense all the way through the system. Then add exact and percentage allocation, followed by settlement. That gives you a working flow before spending time on the trickiest rounding rule. Request records can be sketched; allocation and atomic debt updates deserve the implementation time.
 
 For the walkthrough below, we'll group the three allocation algorithms together so you can compare them. Keep this example in mind:
 
 ```text
 Asha pays ₹900 for Asha, Ben, and Chen
-        ↓ EqualSplit
+        ↓ AddExpenseRequest with EqualSplitInput
+Service validates the request and constructs EqualSplit
+        ↓ Group calls EqualSplit.allocate
 shares: Asha ₹300, Ben ₹300, Chen ₹300
         ↓ Group ignores the payer's own share
 Ben owes Asha ₹300; Chen owes Asha ₹300
@@ -345,6 +381,79 @@ one history record, two current debts
 The strategy never needs to know who paid. It answers how the cost is shared. The group turns those shares into obligations to the payer.
 
 The snippets below use Python and Java-style pseudocode. They share the same semantics. Complete executable reference implementations are linked later. Expected validation failures happen before mutation; process crashes and allocation failures require persistence and transactional recovery, which are outside this in-memory exercise.
+
+### SplitwiseService
+
+Let's connect the caller's data to the internal calculation. A caller can write:
+
+Python:
+
+```python
+service.add_expense(AddExpenseRequest(
+    group_id="trip", payer_id="A", amount=90000,
+    split=EqualSplitInput(["A", "B", "C"])
+))
+```
+
+Java:
+
+```java
+service.addExpense(new AddExpenseRequest(
+    "trip", "A", 90000,
+    new EqualSplitInput(List.of("A", "B", "C"))
+));
+```
+
+The service owns strategy selection:
+
+Python:
+
+```python
+def add_expense(self, request: AddExpenseRequest):
+    if not isinstance(request, AddExpenseRequest):
+        raise ValueError("AddExpenseRequest required")
+    user_id(request.group_id)
+    user_id(request.payer_id)
+    integer(request.amount, 1)
+    group = self._group(request.group_id)
+    split = request.split
+    if isinstance(split, EqualSplitInput):
+        strategy = EqualSplit(split.participants)
+    elif isinstance(split, ExactSplitInput):
+        strategy = ExactSplit(split.amounts_by_user)
+    elif isinstance(split, PercentageSplitInput):
+        strategy = PercentageSplit(split.basis_points_by_user)
+    else:
+        raise ValueError("Unsupported split input")
+    return group.add_expense(request.payer_id, request.amount, strategy)
+
+```
+
+Java:
+
+```java
+public Expense addExpense(AddExpenseRequest request) {
+    require(request != null, "AddExpenseRequest required");
+    validId(request.groupId());
+    validId(request.payerId());
+    require(request.amount() > 0, "Positive amount required");
+    var group = group(request.groupId());
+    SplitStrategy strategy;
+    if (request.split() instanceof EqualSplitInput input)
+        strategy = new EqualSplit(input.participants());
+    else if (request.split() instanceof ExactSplitInput input)
+        strategy = new ExactSplit(input.amountsByUser());
+    else if (request.split() instanceof PercentageSplitInput input)
+        strategy = new PercentageSplit(input.basisPointsByUser());
+    else
+        throw new IllegalArgumentException("Unsupported split input");
+    return group.addExpense(request.payerId(), request.amount(), strategy);
+}
+```
+
+Java's `SplitInput` is a sealed interface with three immutable record variants. Python uses frozen dataclasses and checks the variant at runtime. Both copy input collections. An input DTO is safe to expose because it describes the requested split; the strategy contains the implementation of that split.
+
+This is the only selection point. Group still accepts a strategy because it is an internal domain component, not the client-facing facade. Settlement and read methods already take plain IDs and amounts, so they don't need an equivalent strategy adapter.
 
 ### SplitStrategy
 
@@ -751,12 +860,14 @@ java -cp /tmp/splitwise-classes SplitwiseTest
 
 Let's follow complete state changes rather than just calling methods and hoping the output looks reasonable. Use IDs A, B, and C for Asha, Ben, and Chen.
 
+Before tracing the ledger, check the service boundary. Submit each input variant through `addExpense(request)` and verify the stored shares. Reject unknown groups, unsupported input variants, duplicate equal-split participants, invalid sums, and nonmember participants; verify balances and history stay unchanged. Mutate the original lists or maps after constructing an input DTO and verify its data remains unchanged. These checks belong alongside the lower-level strategy and group tests.
+
 ### Test case 1: equal expense followed by an opposite debt
 
 The group starts empty. A pays ₹900 for A, B, and C.
 
 ```text
-addExpense(A, 90000, EqualSplit([A, B, C]))
+service.addExpense(AddExpenseRequest(trip, A, 90000, EqualSplitInput([A, B, C])))
 
 Allocation: A=30000, B=30000, C=30000
 A's own share: no debt
@@ -808,14 +919,14 @@ An equal 10,000-paise split among A, B, C produces 3334, 3333, 3333. Reordering 
 
 The percentage example produces 34, 33, 34 from 101 paise and weights 3333, 3333, 3334. In both cases, summing the stored shares exactly reproduces the expense total.
 
-For a separate expense where A pays ₹200 entirely for B and C, use `EqualSplit([B, C])`. Both owe A ₹100. We do not force A into the participant set or invent an A share.
+For a separate expense where A pays ₹200 entirely for B and C, submit `EqualSplitInput([B, C])`. Both owe A ₹100. We do not force A into the participant set or invent an A share.
 
 ### Test case 4: malformed allocations do nothing
 
 Start with B owing A ₹50 and three existing history records. Try an exact ₹100 expense with A=₹40 and B=₹50:
 
 ```text
-Service finds the group.
+Service validates the request, finds the group, and creates ExactSplit from ExactSplitInput.
 Group validates payer A and total 10000.
 ExactSplit adds the supplied shares: 4000 + 5000 = 9000.
 9000 != 10000 → reject.

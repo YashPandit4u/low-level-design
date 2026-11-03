@@ -1,7 +1,10 @@
 """Executable Python reference for the accompanying Splitwise LLD article."""
+from __future__ import annotations
+
 from dataclasses import dataclass
 from threading import Lock
-from typing import Protocol
+from typing import Protocol, Mapping
+from types import MappingProxyType
 from uuid import uuid4
 
 
@@ -11,8 +14,40 @@ def integer(value, minimum=0):
 
 
 def user_id(value):
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("User ID must be a nonempty string")
+    if not isinstance(value, str) or not value.strip() or not value.isascii():
+        raise ValueError("ID must be a nonempty ASCII string")
+
+
+@dataclass(frozen=True)
+class EqualSplitInput:
+    participants: tuple[str, ...]
+
+    def __post_init__(self):
+        object.__setattr__(self, "participants", tuple(self.participants))
+
+
+@dataclass(frozen=True)
+class ExactSplitInput:
+    amounts_by_user: Mapping[str, int]
+
+    def __post_init__(self):
+        object.__setattr__(self, "amounts_by_user", MappingProxyType(dict(self.amounts_by_user)))
+
+
+@dataclass(frozen=True)
+class PercentageSplitInput:
+    basis_points_by_user: Mapping[str, int]
+
+    def __post_init__(self):
+        object.__setattr__(self, "basis_points_by_user", MappingProxyType(dict(self.basis_points_by_user)))
+
+
+@dataclass(frozen=True)
+class AddExpenseRequest:
+    group_id: str
+    payer_id: str
+    amount: int  # paise
+    split: EqualSplitInput | ExactSplitInput | PercentageSplitInput
 
 
 class SplitStrategy(Protocol):
@@ -116,6 +151,7 @@ class Group:
 
     def _require_members(self, *users):
         for uid in users:
+            user_id(uid)
             if uid not in self._members:
                 raise ValueError(f"Unknown group member: {uid}")
 
@@ -188,15 +224,33 @@ class Group:
 
 class SplitwiseService:
     def __init__(self, group_members):
+        for gid in group_members:
+            user_id(gid)
         self._groups = {gid: Group(members) for gid, members in group_members.items()}
 
     def _group(self, group_id):
+        user_id(group_id)
         if group_id not in self._groups:
             raise ValueError("Unknown group")
         return self._groups[group_id]
 
-    def add_expense(self, group_id, payer, total, strategy):
-        return self._group(group_id).add_expense(payer, total, strategy)
+    def add_expense(self, request: AddExpenseRequest):
+        if not isinstance(request, AddExpenseRequest):
+            raise ValueError("AddExpenseRequest required")
+        user_id(request.group_id)
+        user_id(request.payer_id)
+        integer(request.amount, 1)
+        group = self._group(request.group_id)
+        split = request.split
+        if isinstance(split, EqualSplitInput):
+            strategy = EqualSplit(split.participants)
+        elif isinstance(split, ExactSplitInput):
+            strategy = ExactSplit(split.amounts_by_user)
+        elif isinstance(split, PercentageSplitInput):
+            strategy = PercentageSplit(split.basis_points_by_user)
+        else:
+            raise ValueError("Unsupported split input")
+        return group.add_expense(request.payer_id, request.amount, strategy)
 
     def record_settlement(self, group_id, debtor, creditor, amount):
         return self._group(group_id).record_settlement(debtor, creditor, amount)

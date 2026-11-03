@@ -5,6 +5,7 @@ from threading import Barrier
 
 from splitwise import (
     Debt, EqualSplit, ExactSplit, Expense, Group, PercentageSplit, SplitwiseService,
+    AddExpenseRequest, EqualSplitInput, ExactSplitInput, PercentageSplitInput,
 )
 
 
@@ -151,9 +152,58 @@ class SplitwiseTests(unittest.TestCase):
         self.assertEqual(group.get_balances(), (Debt("B", "A", 200),))
         self.assertEqual(len(group.get_history()), 200)
 
+    def test_request_boundary_routes_all_split_types(self):
+        service = SplitwiseService({"trip": ["A", "B", "C"]})
+        for split, total, expected in [
+            (EqualSplitInput(["C", "B", "A"]), 100, {"A": 34, "B": 33, "C": 33}),
+            (ExactSplitInput({"B": 100}), 100, {"B": 100}),
+            (PercentageSplitInput({"A": 3333, "B": 3333, "C": 3334}), 101, {"A": 34, "B": 33, "C": 34}),
+        ]:
+            event = service.add_expense(AddExpenseRequest("trip", "A", total, split))
+            self.assertEqual(dict(event.shares), expected)
+        before = service.get_balances("trip"), service.get_history("trip")
+        for request in [
+            AddExpenseRequest("missing", "A", 100, EqualSplitInput(["B"])),
+            AddExpenseRequest("trip", "A", 100, EqualSplit(["B"])),
+            AddExpenseRequest("trip", "A", 100, EqualSplitInput(["B", "B"])),
+            AddExpenseRequest("trip", "A", 100, ExactSplitInput({"B": 99})),
+            AddExpenseRequest("trip", "A", 100, ExactSplitInput({"X": 100})),
+            AddExpenseRequest("trip", "A", 100, PercentageSplitInput({"B": 9999})),
+            AddExpenseRequest("trip", "A", True, EqualSplitInput(["B"])),
+            None,
+        ]:
+            with self.assertRaises(ValueError):
+                service.add_expense(request)
+            self.assertEqual((service.get_balances("trip"), service.get_history("trip")), before)
+
+    def test_service_rejects_invalid_ids_on_every_operation(self):
+        service = SplitwiseService({"trip": ["A", "B"]})
+        for invalid in [None, [], "", "é"]:
+            for operation in [
+                lambda: service.get_balances(invalid),
+                lambda: service.get_history(invalid),
+                lambda: service.record_settlement("trip", invalid, "B", 1),
+                lambda: service.add_expense(AddExpenseRequest(invalid, "A", 1, EqualSplitInput(["B"]))),
+            ]:
+                with self.assertRaises(ValueError):
+                    operation()
+        self.assertEqual(service.get_history("trip"), ())
+
+    def test_request_data_is_defensively_copied(self):
+        users = ["A", "B"]
+        amounts = {"B": 100}
+        weights = {"B": 10000}
+        equal, exact, percent = EqualSplitInput(users), ExactSplitInput(amounts), PercentageSplitInput(weights)
+        users.clear(); amounts.clear(); weights.clear()
+        self.assertEqual(equal.participants, ("A", "B"))
+        self.assertEqual(dict(exact.amounts_by_user), {"B": 100})
+        self.assertEqual(dict(percent.basis_points_by_user), {"B": 10000})
+        with self.assertRaises(TypeError):
+            exact.amounts_by_user["B"] = 0
+
     def test_group_isolation_and_unknown_group(self):
         service = SplitwiseService({"trip": ["A", "B"], "home": ["A", "B"]})
-        service.add_expense("trip", "A", 100, ExactSplit({"B": 100}))
+        service.add_expense(AddExpenseRequest("trip", "A", 100, ExactSplitInput({"B": 100})))
         self.assertEqual(service.get_balances("home"), ())
         with self.assertRaises(ValueError):
             service.get_balances("missing")

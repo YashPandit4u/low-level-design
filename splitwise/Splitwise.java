@@ -7,12 +7,25 @@ public final class Splitwise {
         if (!condition) throw new IllegalArgumentException(message);
     }
     static void validId(String id) {
-        require(id != null && !id.isBlank(), "Invalid user ID");
+        require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
     }
-    public interface SplitStrategy {
+    public sealed interface SplitInput permits EqualSplitInput, ExactSplitInput, PercentageSplitInput {}
+    public record EqualSplitInput(List<String> participants) implements SplitInput {
+        public EqualSplitInput { participants = List.copyOf(participants); }
+    }
+    public record ExactSplitInput(Map<String, Long> amountsByUser) implements SplitInput {
+        public ExactSplitInput { amountsByUser = Map.copyOf(amountsByUser); }
+    }
+    public record PercentageSplitInput(Map<String, Integer> basisPointsByUser) implements SplitInput {
+        public PercentageSplitInput { basisPointsByUser = Map.copyOf(basisPointsByUser); }
+    }
+    public record AddExpenseRequest(String groupId, String payerId, long amount, SplitInput split) {}
+
+    // Internal domain components; callers submit SplitInput data, not strategies.
+    interface SplitStrategy {
         Map<String, Long> allocate(long total);
     }
-    public static final class EqualSplit implements SplitStrategy {
+    static final class EqualSplit implements SplitStrategy {
         private final List<String> users;
         public EqualSplit(List<String> participants) {
             users = List.copyOf(participants);
@@ -31,7 +44,7 @@ public final class Splitwise {
             return result;
         }
     }
-    public static final class ExactSplit implements SplitStrategy {
+    static final class ExactSplit implements SplitStrategy {
         private final Map<String, Long> amounts;
         public ExactSplit(Map<String, Long> amounts) { this.amounts = Map.copyOf(amounts); }
         public Map<String, Long> allocate(long total) {
@@ -46,7 +59,7 @@ public final class Splitwise {
             return amounts;
         }
     }
-    public static final class PercentageSplit implements SplitStrategy {
+    static final class PercentageSplit implements SplitStrategy {
         private final Map<String, Integer> bps;
         public PercentageSplit(Map<String, Integer> bps) { this.bps = Map.copyOf(bps); }
         public Map<String, Long> allocate(long total) {
@@ -87,7 +100,7 @@ public final class Splitwise {
     private record Pair(String lower, String higher) {}
     private record Delta(Pair pair, long value) {}
 
-    public static final class Group {
+    static final class Group {
         private final Set<String> members;
         private final Map<Pair, Long> balances = new HashMap<>();
         private final List<Event> history = new ArrayList<>();
@@ -172,16 +185,31 @@ public final class Splitwise {
     private final Map<String, Group> groups;
     public Splitwise(Map<String, List<String>> groupMembers) {
         Map<String, Group> built = new HashMap<>();
-        groupMembers.forEach((id, members) -> built.put(id, new Group(members)));
+        groupMembers.forEach((id, members) -> { validId(id); built.put(id, new Group(members)); });
         groups = Map.copyOf(built);
     }
     private Group group(String id) {
+        validId(id);
         var group = groups.get(id);
         require(group != null, "Unknown group");
         return group;
     }
-    public Expense addExpense(String groupId, String payer, long total, SplitStrategy strategy) {
-        return group(groupId).addExpense(payer, total, strategy);
+    public Expense addExpense(AddExpenseRequest request) {
+        require(request != null, "AddExpenseRequest required");
+        validId(request.groupId());
+        validId(request.payerId());
+        require(request.amount() > 0, "Positive amount required");
+        var group = group(request.groupId());
+        SplitStrategy strategy;
+        if (request.split() instanceof EqualSplitInput input)
+            strategy = new EqualSplit(input.participants());
+        else if (request.split() instanceof ExactSplitInput input)
+            strategy = new ExactSplit(input.amountsByUser());
+        else if (request.split() instanceof PercentageSplitInput input)
+            strategy = new PercentageSplit(input.basisPointsByUser());
+        else
+            throw new IllegalArgumentException("Unsupported split input");
+        return group.addExpense(request.payerId(), request.amount(), strategy);
     }
     public Settlement recordSettlement(String groupId, String debtor, String creditor, long amount) {
         return group(groupId).recordSettlement(debtor, creditor, amount);
