@@ -3,20 +3,12 @@ import java.util.*;
 
 /** Java 17+ reference implementation for the accompanying article. */
 public final class Splitwise {
-    // Internal stateless algorithms; expense inputs arrive on each call.
+    // Internal algorithms. Group validates and copies common inputs before calling.
     interface SplitStrategy {
         Map<String, Long> allocate(long total, List<String> participants, List<Long> values);
     }
     static final class EqualSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-            if (total <= 0) throw new IllegalArgumentException("Positive total required");
-            if (participants == null || participants.isEmpty())
-                throw new IllegalArgumentException("Participants required");
-            if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
-                throw new IllegalArgumentException("Invalid participant ID");
-            participants = List.copyOf(participants);
-            if (new HashSet<>(participants).size() != participants.size())
-                throw new IllegalArgumentException("Duplicate participant");
             var sorted = new ArrayList<>(participants);
             if (values != null) throw new IllegalArgumentException("Equal splits do not take values");
             Collections.sort(sorted);
@@ -29,18 +21,7 @@ public final class Splitwise {
     }
     static final class ExactSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-            if (total <= 0) throw new IllegalArgumentException("Positive total required");
-            if (participants == null || participants.isEmpty())
-                throw new IllegalArgumentException("Participants required");
-            if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
-                throw new IllegalArgumentException("Invalid participant ID");
-            participants = List.copyOf(participants);
-            if (new HashSet<>(participants).size() != participants.size())
-                throw new IllegalArgumentException("Duplicate participant");
-            if (values == null || values.size() != participants.size())
-                throw new IllegalArgumentException("One value per participant required");
-            if (values.stream().anyMatch(value -> value == null || value < 0))
-                throw new IllegalArgumentException("Invalid split value");
+            if (values == null) throw new IllegalArgumentException("Split values required");
             Map<String, Long> amounts = new HashMap<>();
             for (int i = 0; i < participants.size(); i++)
                 amounts.put(participants.get(i), values.get(i));
@@ -52,18 +33,7 @@ public final class Splitwise {
     }
     static final class PercentageSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-            if (total <= 0) throw new IllegalArgumentException("Positive total required");
-            if (participants == null || participants.isEmpty())
-                throw new IllegalArgumentException("Participants required");
-            if (participants.stream().anyMatch(id -> id == null || id.isBlank()))
-                throw new IllegalArgumentException("Invalid participant ID");
-            participants = List.copyOf(participants);
-            if (new HashSet<>(participants).size() != participants.size())
-                throw new IllegalArgumentException("Duplicate participant");
-            if (values == null || values.size() != participants.size())
-                throw new IllegalArgumentException("One value per participant required");
-            if (values.stream().anyMatch(value -> value == null || value < 0))
-                throw new IllegalArgumentException("Invalid split value");
+            if (values == null) throw new IllegalArgumentException("Split values required");
             Map<String, Long> bps = new HashMap<>();
             for (int i = 0; i < participants.size(); i++)
                 bps.put(participants.get(i), values.get(i));
@@ -134,10 +104,16 @@ public final class Splitwise {
                 throw new IllegalArgumentException("Duplicate participant");
             if (!members.containsAll(participants))
                 throw new IllegalArgumentException("Unknown group participant");
-            values = values == null ? null : new ArrayList<>(values);
+            if (values != null) {
+                if (values.size() != participants.size())
+                    throw new IllegalArgumentException("One value per participant required");
+                if (values.stream().anyMatch(value -> value == null || value < 0))
+                    throw new IllegalArgumentException("Invalid split value");
+                values = List.copyOf(values);
+            }
+
             var shares = Map.copyOf(strategy.allocate(total, participants, values));
             if (!shares.keySet().equals(new HashSet<>(participants))) throw new IllegalArgumentException("Allocation must contain exactly the participants");
-            if (shares.isEmpty()) throw new IllegalArgumentException("Participants required");
             long sum = 0;
             for (var entry : shares.entrySet()) {
                 if (entry.getValue() < 0) throw new IllegalArgumentException("Negative share");

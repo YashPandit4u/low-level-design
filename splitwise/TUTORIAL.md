@@ -549,7 +549,7 @@ Group.addExpense(payer, total, strategy, participants, values):
 
 The service accepts `addExpense(groupId, payer, total, splitType, participants, values)`. `splitType` is a string: `"EQUAL"`, `"EXACT"`, or `"PERCENTAGE"`. Exact values are amounts in paise. Percentage values are basis points. Both lists follow participant order. Equal splits need no values. Reject duplicate participants and mismatched lengths, then select the internal strategy. No request classes are needed.
 
-These strategies store no expense data. The same instance can handle different expenses. Group passes the inputs into `allocate`.
+These strategies store no expense data. The same instance can handle different expenses. Group validates and copies the common inputs before calling `allocate`. Each strategy checks only its own split rules, so the calculations do not repeat the same validation code.
 
 Each strategy calculates shares differently but returns the same kind of result. A switch in an allocation helper would also work for a fixed set of modes. Separate strategies become useful when we want to test and extend each rule independently.
 

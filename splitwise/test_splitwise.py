@@ -72,7 +72,7 @@ class SplitwiseTests(unittest.TestCase):
     def test_duplicate_and_empty_participants(self):
         for users in ([], ['A', 'A'], ['']):
             with self.assertRaises(ValueError):
-                EqualSplitStrategy().allocate(100, users)
+                Group(["A", "B"]).add_expense("A", 100, EqualSplitStrategy(), users)
 
     def test_defensive_copies_and_immutable_results(self):
         (participants, amounts) = (['B'], [100])
@@ -172,7 +172,7 @@ class SplitwiseTests(unittest.TestCase):
         expense = service.add_expense("voyagé", "A", 100, "EXACT", ["É"], [100])
         self.assertEqual(dict(expense.shares), {"É": 100})
         before = service.get_balances("voyagé"), service.get_history("voyagé")
-        for users, values in [([None], [100]), ([[]], [100]), ([" "], [100]), (["É"], [-1]), (["É"], [True])]:
+        for users, values in [([None], [100]), ([[]], [100]), ([" "], [100]), (["É"], [-1]), (["É"], [True]), (["É"], "100"), (["É"], 100), (["É"], [100, 0])]:
             with self.assertRaises(ValueError):
                 service.add_expense("voyagé", "A", 100, "EXACT", users, values)
             self.assertEqual((service.get_balances("voyagé"), service.get_history("voyagé")), before)
@@ -198,9 +198,9 @@ class StrategyReuseTests(unittest.TestCase):
                 self.assertEqual(strategy.allocate(2 * i, users, values), {users[0]: i, users[1]: i})
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(calculate, range(1, 101)))
-        for strategy in strategies:
+        for strategy, values in zip(strategies, [[10], [9], [9999]]):
             with self.assertRaises(ValueError):
-                strategy.allocate(10, [], None)
+                strategy.allocate(10, ["A"], values)
         calculate(7)
 
     def test_strategy_cannot_substitute_another_member(self):

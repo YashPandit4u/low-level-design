@@ -8,20 +8,12 @@ from uuid import uuid4
 
 
 class SplitStrategy(Protocol):
+    """Internal algorithms. Group validates and copies common inputs before calling."""
     def allocate(self, total: int, participants, values=None) -> dict[str, int]: ...
 
 
 class EqualSplitStrategy:
     def allocate(self, total, participants, values=None):
-        if type(total) is not int or total < 1:
-            raise ValueError("Invalid amount")
-        if not isinstance(participants, (list, tuple)) or not participants:
-            raise ValueError("Participants required")
-        participants = tuple(participants)
-        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
-            raise ValueError("Invalid participant ID")
-        if len(set(participants)) != len(participants):
-            raise ValueError("Duplicate participant")
         users = sorted(participants)
         if values is not None:
             raise ValueError("Equal splits do not take values")
@@ -31,19 +23,8 @@ class EqualSplitStrategy:
 
 class ExactSplitStrategy:
     def allocate(self, total, participants, values=None):
-        if type(total) is not int or total < 1:
-            raise ValueError("Invalid amount")
-        if not isinstance(participants, (list, tuple)) or not participants:
-            raise ValueError("Participants required")
-        participants = tuple(participants)
-        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
-            raise ValueError("Invalid participant ID")
-        if len(set(participants)) != len(participants):
-            raise ValueError("Duplicate participant")
-        if not isinstance(values, (list, tuple)) or len(values) != len(participants):
-            raise ValueError("One value per participant required")
-        if any(type(value) is not int or value < 0 for value in values):
-            raise ValueError("Shares must be nonnegative integers")
+        if values is None:
+            raise ValueError("Split values required")
         amounts = dict(zip(participants, values))
         if sum(amounts.values()) != total:
             raise ValueError("Shares must sum to the expense total")
@@ -53,25 +34,16 @@ class ExactSplitStrategy:
 class PercentageSplitStrategy:
     """Integer basis points: 10000 means 100 percent."""
     def allocate(self, total, participants, values=None):
-        if type(total) is not int or total < 1:
-            raise ValueError("Invalid amount")
-        if not isinstance(participants, (list, tuple)) or not participants:
-            raise ValueError("Participants required")
-        participants = tuple(participants)
-        if any(not isinstance(uid, str) or not uid.strip() for uid in participants):
-            raise ValueError("Invalid participant ID")
-        if len(set(participants)) != len(participants):
-            raise ValueError("Duplicate participant")
-        if not isinstance(values, (list, tuple)) or len(values) != len(participants):
-            raise ValueError("One value per participant required")
-        if any(type(value) is not int or value < 0 for value in values):
-            raise ValueError("Shares must be nonnegative integers")
+        if values is None:
+            raise ValueError("Split values required")
         basis_points = dict(zip(participants, values))
         if sum(basis_points.values()) != 10000:
             raise ValueError("Percentages must sum to 10000 basis points")
+
         shares, fractions = {}, {}
         for uid, weight in basis_points.items():
             shares[uid], fractions[uid] = divmod(total * weight, 10000)
+
         leftover = total - sum(shares.values())
         order = sorted(shares, key=lambda uid: (-fractions[uid], uid))
         for uid in order[:leftover]:
@@ -135,13 +107,17 @@ class Group:
             raise ValueError("Duplicate participant")
         if not self._members.issuperset(participants):
             raise ValueError("Unknown group participant")
-        values = tuple(values) if values is not None else None
-        # Expense inputs are local snapshots; strategies retain no per-call state.
+        if values is not None:
+            if not isinstance(values, (list, tuple)) or len(values) != len(participants):
+                raise ValueError("One value per participant required")
+            if any(type(value) is not int or value < 0 for value in values):
+                raise ValueError("Split values must be nonnegative integers")
+            values = tuple(values)
+
+        # The strategy only needs to check its split-specific rules.
         shares = dict(strategy.allocate(total, participants, values))
         if set(shares) != set(participants):
             raise ValueError("Allocation must contain exactly the participants")
-        if not shares:
-            raise ValueError("At least one participant is required")
         for amount in shares.values():
             if type(amount) is not int or amount < 0:
                 raise ValueError("Invalid amount")
