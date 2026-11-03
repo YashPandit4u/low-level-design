@@ -392,8 +392,6 @@ Group.addExpense(payer, total, strategy):
 
 The service accepts `addExpense(groupId, payer, total, splitType, participants, values)`. `splitType` is a string: `"EQUAL"`, `"EXACT"`, or `"PERCENTAGE"`. Exact values are paise; percentage values are basis points, in participant order. Equal splits need no values. Reject duplicate participants and mismatched lengths, then select the internal strategy. No request classes are needed.
 
-If exposed over HTTP, authenticate the caller and check group access; membership alone isn't authorization. That transport layer remains outside this exercise.
-
 Now Strategy has a purpose: several calculations share one output contract. A switch in an allocation helper would also work for a fixed set of modes. Separate strategies become useful when we want to test and extend each rule independently.
 
 For **exact amounts**, require a nonempty allocation, nonnegative integer shares, and a sum equal to the total. Copy the accepted allocation. Group checks that every participant belongs to it.

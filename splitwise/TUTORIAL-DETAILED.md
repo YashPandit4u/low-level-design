@@ -169,8 +169,6 @@ addExpense(groupId, payer, total, splitType, participants, values)
 
 Reject duplicate participants, unknown split types, and missing or mismatched values. Equal splits reject extra values. The service selects the strategy; the strategy checks the allocation; Group checks membership and updates debts. Collections are copied before use.
 
-If exposed over HTTP, parse the split type from text and authenticate the caller before invoking this service. Membership checks alone don't authorize access. Return result data, not internal Group or strategy objects. HTTP handling remains outside this exercise.
-
 ### Group and balance representation
 
 A group needs its members, history, current balances, and a lock. Before writing those fields down, let's decide what a balance means.

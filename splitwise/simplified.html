@@ -375,7 +375,6 @@ Group.addExpense(payer, total, strategy):
     apply each nonpayer share using addDebt
 </code></pre></div>
 <p>The service accepts <code>addExpense(groupId, payer, total, splitType, participants, values)</code>. <code>splitType</code> is a string: <code>"EQUAL"</code>, <code>"EXACT"</code>, or <code>"PERCENTAGE"</code>. Exact values are paise; percentage values are basis points, in participant order. Equal splits need no values. Reject duplicate participants and mismatched lengths, then select the internal strategy. No request classes are needed.</p>
-<p>If exposed over HTTP, authenticate the caller and check group access; membership alone isn't authorization. That transport layer remains outside this exercise.</p>
 <p>Now Strategy has a purpose: several calculations share one output contract. A switch in an allocation helper would also work for a fixed set of modes. Separate strategies become useful when we want to test and extend each rule independently.</p>
 <p>For <strong>exact amounts</strong>, require a nonempty allocation, nonnegative integer shares, and a sum equal to the total. Copy the accepted allocation. Group checks that every participant belongs to it.</p>
 <p>For <strong>percentages</strong>, represent 25.00% as 2500 basis points and require weights to sum to 10000. Avoid independently rounding each share. For 101 paise split 33.33%, 33.33%, and 33.34%, rounding all three quotas to the nearest paise gives 34 + 34 + 34 = 102.</p>
