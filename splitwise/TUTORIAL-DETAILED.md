@@ -368,7 +368,7 @@ We don't need to spend equal time implementing every class. The important method
 - **Group.recordSettlement:** check the current debt before reducing it. A rejected payment must leave the group unchanged.
 - **SplitwiseService:** show how the service chooses a strategy and calls Group.
 
-Expense, Settlement, and Debt only store the fields we already defined. We don’t need to implement them in detail here. We’ll also explain how balance and history reads return copies that callers cannot use to change group data.
+We’ll also implement the constructors, shared validation helpers, and read methods used by these operations. The result records are short, so we’ll show their definitions after Group.
 
 We’ll show the service entry point, implement the allocation algorithms, then connect them to Group.
 
@@ -395,40 +395,32 @@ one history record, two current debts
 
 The strategy never needs to know who paid. It answers how the cost is shared. The group turns those shares into obligations to the payer.
 
-The snippets below use Python and Java-style pseudocode. They share the same semantics. Complete executable reference implementations are linked later. Invalid requests must be rejected before changing balances or history. This in-memory version does not handle process crashes or memory allocation failures.
+The snippets below use the methods from the runnable Python and Java implementations. Methods shown separately belong to the class named by their section. Python uses `Lock`, `Protocol`, `dataclass`, and `uuid4`. Java uses `java.util.*` and `BigInteger`. The complete files below include the imports and class wrappers. Invalid requests must be rejected before changing balances or history. This in-memory version does not handle process crashes or memory allocation failures.
 
 ### SplitwiseService
 
-The caller supplies the expense data. The service uses the split type to choose a strategy:
+The service receives a group ID and plain expense data. It finds the group and chooses a strategy. Group performs the balance changes.
+
+**Constructor and group lookup.**
+
+Create the groups once at startup and keep one instance of each strategy. The lookup helper rejects unknown group IDs, so every public method uses the same check.
 
 Python:
 
 ```python
-service.add_expense("trip", "A", 90000, "EQUAL", ["A", "B", "C"])
-```
+class SplitwiseService:
+    def __init__(self, group_members):
+        self._strategies = {"EQUAL": EqualSplitStrategy(), "EXACT": ExactSplitStrategy(),
+                            "PERCENTAGE": PercentageSplitStrategy()}
+        for gid in group_members:
+            user_id(gid)
+        self._groups = {gid: Group(members) for gid, members in group_members.items()}
 
-Java:
-
-```java
-service.addExpense("trip", "A", 90000, "EQUAL", List.of("A", "B", "C"), null);
-```
-
-Create one instance of each algorithm when the service is initialized. Each expense selects one by its split-type string:
-
-Python:
-
-```python
-# In the service constructor:
-self.strategies = {
-    "EQUAL": EqualSplitStrategy(),
-    "EXACT": ExactSplitStrategy(),
-    "PERCENTAGE": PercentageSplitStrategy(),
-}
-
-# In add_expense, after looking up the group:
-require(split_type in self.strategies)
-strategy = self.strategies[split_type]
-return group.add_expense(payer, total, strategy, participants, values)
+    def _group(self, group_id):
+        user_id(group_id)
+        if group_id not in self._groups:
+            raise ValueError("Unknown group")
+        return self._groups[group_id]
 ```
 
 Java:
@@ -438,24 +430,185 @@ private final Map<String, SplitStrategy> strategies = Map.of(
     "EQUAL", new EqualSplitStrategy(),
     "EXACT", new ExactSplitStrategy(),
     "PERCENTAGE", new PercentageSplitStrategy());
+private final Map<String, Group> groups;
 
-// In addExpense, after looking up the group:
-require(splitType != null && strategies.containsKey(splitType));
-SplitStrategy strategy = strategies.get(splitType);
-return group.addExpense(payer, total, strategy, participants, values);
+public Splitwise(Map<String, List<String>> groupMembers) {
+    Map<String, Group> built = new HashMap<>();
+    groupMembers.forEach((id, members) -> { validId(id); built.put(id, new Group(members)); });
+    groups = Map.copyOf(built);
+}
+
+private Group group(String id) {
+    validId(id);
+    var group = groups.get(id);
+    require(group != null, "Unknown group");
+    return group;
+}
 ```
 
-The service selects the algorithm. Group passes the expense inputs to it. Nothing is stored on the strategy between calls.
+The Java service class is named `Splitwise` in the runnable file. The methods below belong to that class. In Python, add them to `SplitwiseService`.
 
-Group accepts a strategy internally. The public service accepts a split-type string and plain expense data. We don't need a factory class or a request-object hierarchy for this.
+**Adding an expense.**
+
+Look up the group, check the payer ID and amount, and select the strategy. Unknown split types are rejected here. Pass the participants and values to Group along with the selected algorithm.
+
+Python:
+
+```python
+def add_expense(self, group_id, payer, total, split_type, participants, values=None):
+    group = self._group(group_id)
+    user_id(payer)
+    integer(total, 1)
+    if not isinstance(split_type, str) or split_type not in self._strategies:
+        raise ValueError("Unknown split type")
+    strategy = self._strategies[split_type]
+    return group.add_expense(payer, total, strategy, participants, values)
+```
+
+Java:
+
+```java
+public Expense addExpense(String groupId, String payer, long total, String splitType,
+                          List<String> participants, List<Long> values) {
+    var group = group(groupId);
+    validId(payer);
+    require(total > 0, "Positive total required");
+    require(splitType != null && strategies.containsKey(splitType), "Unknown split type");
+    return group.addExpense(payer, total, strategies.get(splitType), participants, values);
+}
+```
+
+The caller still passes a string such as `"EQUAL"`. They never construct a strategy object.
+
+**Settlements and reads.**
+
+These methods find the requested group and return its result. Settlement validation belongs to Group because it needs the current debt. Group also creates safe copies for balance and history reads.
+
+Python:
+
+```python
+def record_settlement(self, group_id, debtor, creditor, amount):
+    return self._group(group_id).record_settlement(debtor, creditor, amount)
+
+def get_balances(self, group_id):
+    return self._group(group_id).get_balances()
+
+def get_history(self, group_id):
+    return self._group(group_id).get_history()
+```
+
+Java:
+
+```java
+public Settlement recordSettlement(String groupId, String debtor, String creditor, long amount) {
+    return group(groupId).recordSettlement(debtor, creditor, amount);
+}
+
+public List<Debt> getBalances(String groupId) { return group(groupId).getBalances(); }
+
+public List<Event> getHistory(String groupId) { return group(groupId).getHistory(); }
+```
+
+**Basic input checks.**
+
+These shared helpers check IDs and amounts. Python explicitly rejects booleans because `bool` is a subclass of `int`. Java method signatures already require integer money values.
+
+Python:
+
+```python
+def integer(value, minimum=0):
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"Expected an integer >= {minimum}")
+
+def user_id(value):
+    if not isinstance(value, str) or not value.strip() or not value.isascii():
+        raise ValueError("ID must be a nonempty ASCII string")
+```
+
+Java:
+
+```java
+static void require(boolean condition, String message) {
+    if (!condition) throw new IllegalArgumentException(message);
+}
+
+static void validId(String id) {
+    require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
+}
+```
 
 ### SplitStrategy
 
-All three strategies implement `allocate(total, participants, values)` and return each participant's share in paise. The snippets below show their method bodies.
+All three strategies implement `allocate(total, participants, values)` and return each participant's share in paise. Each class below implements that interface and keeps no expense data between calls.
 
 The `participant_ids` / `participantIds` helper copies the participant list. It checks that the list is nonempty and contains valid, unique IDs.
 
 The `split_values` / `splitValues` helper checks that every participant has one nonnegative integer value. It then builds a map from user ID to value.
+
+
+Python:
+
+```python
+def participant_ids(participants):
+    if participants is None or isinstance(participants, (str, bytes)):
+        raise ValueError("Participant list required")
+    users = tuple(participants)
+    if not users:
+        raise ValueError("At least one participant is required")
+    for uid in users:
+        user_id(uid)
+    if len(set(users)) != len(users):
+        raise ValueError("Duplicate participant")
+    return users
+
+def split_values(users, values):
+    if values is None or isinstance(values, (str, bytes)):
+        raise ValueError("One value per participant required")
+    values = tuple(values)
+    if len(values) != len(users):
+        raise ValueError("One value per participant required")
+    for value in values:
+        integer(value)
+    return dict(zip(users, values))
+```
+
+Java:
+
+```java
+static List<String> participantIds(List<String> participants) {
+    require(participants != null && !participants.isEmpty(), "Participants required");
+    participants.forEach(Splitwise::validId);
+    var users = List.copyOf(participants);
+    require(new HashSet<>(users).size() == users.size(), "Duplicate participant");
+    return users;
+}
+
+static Map<String, Long> splitValues(List<String> users, List<Long> values) {
+    require(values != null && values.size() == users.size(), "One value per participant required");
+    for (Long value : values) require(value != null && value >= 0, "Invalid split value");
+    values = List.copyOf(values);
+    Map<String, Long> result = new HashMap<>();
+    for (int i = 0; i < users.size(); i++) result.put(users.get(i), values.get(i));
+    return result;
+}
+```
+
+The interface gives every strategy the same inputs and output:
+
+Python:
+
+```python
+class SplitStrategy(Protocol):
+    def allocate(self, total: int, participants, values=None) -> dict[str, int]: ...
+```
+
+Java:
+
+```java
+interface SplitStrategy {
+    Map<String, Long> allocate(long total, List<String> participants, List<Long> values);
+}
+```
 
 **EqualSplitStrategy and the missing paise.**
 
@@ -476,29 +629,31 @@ Sort the participant IDs and give one extra paise to each of the first `remainde
 Python:
 
 ```python
-def allocate(self, total, participants, values=None):
-    require(total > 0 and values is None)
-    users = sorted(participant_ids(participants))
-    base, remainder = divmod(total, len(users))
-    return {
-        uid: base + (1 if i < remainder else 0)
-        for i, uid in enumerate(users)
-    }
+class EqualSplitStrategy:
+    def allocate(self, total, participants, values=None):
+        integer(total, 1)
+        users = sorted(participant_ids(participants))
+        if values is not None:
+            raise ValueError("Equal splits do not take values")
+        base, remainder = divmod(total, len(users))
+        return {uid: base + (i < remainder) for i, uid in enumerate(users)}
 ```
 
 Java:
 
 ```java
-Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-    require(total > 0 && values == null);
-    var users = sortedCopy(participantIds(participants));
-    long base = total / users.size();
-    long remainder = total % users.size();
-    Map<String, Long> shares = new HashMap<>();
-    for (int i = 0; i < users.size(); i++) {
-        shares.put(users.get(i), base + (i < remainder ? 1 : 0));
+static final class EqualSplitStrategy implements SplitStrategy {
+    public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
+        require(total > 0, "Positive total required");
+        var sorted = new ArrayList<>(participantIds(participants));
+        require(values == null, "Equal splits do not take values");
+        Collections.sort(sorted);
+        long base = total / sorted.size(), remainder = total % sorted.size();
+        Map<String, Long> result = new HashMap<>();
+        for (int i = 0; i < sorted.size(); i++)
+            result.put(sorted.get(i), base + (i < remainder ? 1 : 0));
+        return result;
     }
-    return shares;
 }
 ```
 
@@ -511,27 +666,27 @@ Exact splitting is validation, not an allocation algorithm. The caller already s
 Python:
 
 ```python
-def allocate(self, total, participants, values=None):
-    require(total > 0)
-    amounts = split_values(participant_ids(participants), values)
-    require(all(is_integer(x) and x >= 0 for x in amounts.values()))
-    require(sum(amounts.values()) == total)
-    return dict(amounts)  # defensive copy
+class ExactSplitStrategy:
+    def allocate(self, total, participants, values=None):
+        integer(total, 1)
+        amounts = split_values(participant_ids(participants), values)
+        if sum(amounts.values()) != total:
+            raise ValueError("Shares must sum to the expense total")
+        return amounts
 ```
 
 Java:
 
 ```java
-Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-    require(total > 0);
-    var amounts = splitValues(participantIds(participants), values);
-    long sum = 0;
-    for (long amount : amounts.values()) {
-        require(amount >= 0);
-        sum = Math.addExact(sum, amount);
+static final class ExactSplitStrategy implements SplitStrategy {
+    public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
+        require(total > 0, "Positive total required");
+        var amounts = splitValues(participantIds(participants), values);
+        long sum = 0;
+        for (long amount : amounts.values()) sum = Math.addExact(sum, amount);
+        require(sum == total, "Shares must sum to total");
+        return amounts;
     }
-    require(sum == total);
-    return Map.copyOf(amounts);
 }
 ```
 
@@ -558,51 +713,55 @@ The floors sum to 99. Two paise remain. C gets the first. A wins the tie for the
 Python:
 
 ```python
-def allocate(self, total, participants, values=None):
-    require(total > 0)
-    basis_points = split_values(participant_ids(participants), values)
-    require(all(is_integer(w) and w >= 0 for w in basis_points.values()))
-    require(sum(basis_points.values()) == 10000)
-
-    shares, fractions = {}, {}
-    for uid, weight in basis_points.items():
-        shares[uid], fractions[uid] = divmod(total * weight, 10000)
-
-    leftover = total - sum(shares.values())
-    order = sorted(shares, key=lambda uid: (-fractions[uid], uid))
-    for uid in order[:leftover]:
-        shares[uid] += 1
-    return shares
+class PercentageSplitStrategy:
+    """Integer basis points: 10000 means 100 percent."""
+    def allocate(self, total, participants, values=None):
+        integer(total, 1)
+        basis_points = split_values(participant_ids(participants), values)
+        if sum(basis_points.values()) != 10000:
+            raise ValueError("Percentages must sum to 10000 basis points")
+        shares, fractions = {}, {}
+        for uid, weight in basis_points.items():
+            shares[uid], fractions[uid] = divmod(total * weight, 10000)
+        leftover = total - sum(shares.values())
+        order = sorted(shares, key=lambda uid: (-fractions[uid], uid))
+        for uid in order[:leftover]:
+            shares[uid] += 1
+        return shares
 ```
 
 Java:
 
 ```java
-Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
-    var bps = splitValues(participantIds(participants), values);
-    validatePositiveTotalAndPercentages(total, bps); // nonempty, sum = 10000
-    Map<String, Long> shares = new HashMap<>();
-    Map<String, Long> fractions = new HashMap<>();
-    long allocated = 0;
-
-    for (var entry : bps.entrySet()) {
-        // Widen before multiplication so total * weight cannot overflow long.
-        BigInteger numerator = BigInteger.valueOf(total)
-            .multiply(BigInteger.valueOf(entry.getValue()));
-        BigInteger[] qr = numerator.divideAndRemainder(BigInteger.valueOf(10000));
-        long share = qr[0].longValueExact();
-        shares.put(entry.getKey(), share);
-        fractions.put(entry.getKey(), qr[1].longValueExact());
-        allocated = Math.addExact(allocated, share);
+static final class PercentageSplitStrategy implements SplitStrategy {
+    public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
+        require(total > 0, "Positive total required");
+        var bps = splitValues(participantIds(participants), values);
+        long sum = 0;
+        for (long weight : bps.values()) {
+            require(weight <= 10000, "Invalid percentage");
+            sum += weight;
+        }
+        require(sum == 10000, "Percentages must sum to 10000 basis points");
+        Map<String, Long> shares = new HashMap<>();
+        Map<String, Long> fractions = new HashMap<>();
+        long allocated = 0;
+        for (var entry : bps.entrySet()) {
+            var qr = BigInteger.valueOf(total).multiply(BigInteger.valueOf(entry.getValue()))
+                    .divideAndRemainder(BigInteger.valueOf(10000));
+            long share = qr[0].longValueExact();
+            shares.put(entry.getKey(), share);
+            fractions.put(entry.getKey(), qr[1].longValueExact());
+            allocated = Math.addExact(allocated, share);
+        }
+        var order = new ArrayList<>(bps.keySet());
+        order.sort(Comparator.<String>comparingLong(fractions::get).reversed()
+                .thenComparing(Comparator.naturalOrder()));
+        long leftover = total - allocated;
+        for (int i = 0; i < leftover; i++)
+            shares.put(order.get(i), shares.get(order.get(i)) + 1);
+        return shares;
     }
-
-    var order = sortByRemainderDescendingThenIdAscending(fractions);
-    long leftover = total - allocated;
-    for (int i = 0; i < leftover; i++) {
-        String uid = order.get(i);
-        shares.put(uid, shares.get(uid) + 1);
-    }
-    return shares;
 }
 ```
 
@@ -614,6 +773,57 @@ Notice that a 0% participant gets no fractional remainder and no allocation. The
 
 The group turns allocations into debts and records settlements. We’ll first show how to turn a debt into a signed balance. Then we’ll implement expenses and settlements using the same group lock.
 
+**Constructor and membership checks.**
+
+A group starts with fixed members, no debts, and an empty history. Copy the member IDs so later changes to the caller’s list cannot change membership. Each group owns its lock.
+
+Python:
+
+```python
+class Group:
+    def __init__(self, members):
+        members = tuple(members)
+        if not members:
+            raise ValueError("Group must have members")
+        for uid in members:
+            user_id(uid)
+        if len(set(members)) != len(members):
+            raise ValueError("Duplicate group member")
+        self._members = frozenset(members)
+        self._balances = {}  # (lower ID, higher ID) -> signed minor units
+        self._history = []
+        self._lock = Lock()
+
+    def _require_members(self, *users):
+        for uid in users:
+            user_id(uid)
+            if uid not in self._members:
+                raise ValueError(f"Unknown group member: {uid}")
+```
+
+Java:
+
+```java
+private final Set<String> members;
+private final Map<Pair, Long> balances = new HashMap<>();
+private final List<Event> history = new ArrayList<>();
+private final Object lock = new Object();
+
+public Group(List<String> users) {
+    require(!users.isEmpty(), "Group members required");
+    users.forEach(Splitwise::validId);
+    members = Set.copyOf(users);
+    require(members.size() == users.size(), "Duplicate member");
+}
+
+private void member(String user) {
+    validId(user);
+    require(members.contains(user), "Unknown group member");
+}
+```
+
+The remaining methods belong to Group. The membership helper rejects invalid IDs and users outside this group before their balances can change.
+
 **Translating a share into debt.**
 
 Every participant owes their allocated share to the payer, except when the participant is the payer. A helper will sort the two user IDs and choose the sign that represents who owes whom.
@@ -621,7 +831,8 @@ Every participant owes their allocated share to the payer, except when the parti
 Python:
 
 ```python
-def debt_delta(debtor, creditor, amount):
+@staticmethod
+def _delta(debtor, creditor, amount):
     if debtor < creditor:
         return (debtor, creditor), amount
     return (creditor, debtor), -amount
@@ -630,13 +841,13 @@ def debt_delta(debtor, creditor, amount):
 Java:
 
 ```java
-record Pair(String lower, String higher) {}
-record Delta(Pair pair, long value) {}
+private record Pair(String lower, String higher) {}
+private record Delta(Pair pair, long value) {}
 
-Delta debtDelta(String debtor, String creditor, long amount) {
+private static Delta delta(String debtor, String creditor, long amount) {
     return debtor.compareTo(creditor) < 0
-        ? new Delta(new Pair(debtor, creditor), amount)
-        : new Delta(new Pair(creditor, debtor), -amount);
+            ? new Delta(new Pair(debtor, creditor), amount)
+            : new Delta(new Pair(creditor, debtor), -amount);
 }
 ```
 
@@ -670,51 +881,64 @@ Every rejection must leave balances and history unchanged. For example, shares o
 Python:
 
 ```python
-def add_expense(self, payer, total, strategy, participants, values=None):
-    require_positive_integer(total)
-    self.require_member(payer)
+def add_expense(self, payer, total, strategy: SplitStrategy, participants, values=None):
+    integer(total, 1)
+    self._require_members(payer)
     participants = participant_ids(participants)
-    self.require_members(*participants)
+    self._require_members(*participants)
     values = tuple(values) if values is not None else None
+    # Expense inputs are local snapshots; strategies retain no per-call state.
     shares = dict(strategy.allocate(total, participants, values))
-    require(set(shares) == set(participants))
-    self.validate_allocation(total, shares)
-    expense = Expense(new_id(), payer, total, immutable_copy(shares))
+    if set(shares) != set(participants):
+        raise ValueError("Allocation must contain exactly the participants")
+    if not shares:
+        raise ValueError("At least one participant is required")
+    self._require_members(*shares)
+    for amount in shares.values():
+        integer(amount)
+    if sum(shares.values()) != total:
+        raise ValueError("Invalid strategy result")
 
-    with self.lock:
+    expense = Expense(str(uuid4()), payer, total, tuple(sorted(shares.items())))
+    with self._lock:
         pending = {}
         for participant, amount in shares.items():
             if participant == payer or amount == 0:
                 continue
-            pair, delta = debt_delta(participant, payer, amount)
-            pending[pair] = self.balances.get(pair, 0) + delta
-
-        self.commit(pending, expense)
+            pair, delta = self._delta(participant, payer, amount)
+            pending[pair] = self._balances.get(pair, 0) + delta
+        self._commit(pending, expense)
     return expense
 ```
 
 Java:
 
 ```java
-Expense addExpense(String payer, long total, SplitStrategy strategy,
-                   List<String> participants, List<Long> values) {
-    require(total > 0);
-    requireMember(payer);
+public Expense addExpense(String payer, long total, SplitStrategy strategy,
+                          List<String> participants, List<Long> values) {
+    require(total > 0, "Positive total required");
+    member(payer);
     participants = participantIds(participants);
-    requireMembers(participants);
+    participants.forEach(this::member);
     values = values == null ? null : new ArrayList<>(values);
     var shares = Map.copyOf(strategy.allocate(total, participants, values));
-    require(shares.keySet().equals(new HashSet<>(participants)));
-    validateAllocation(total, shares);
-    var expense = new Expense(newId(), payer, total, shares);
-
+    require(shares.keySet().equals(new HashSet<>(participants)), "Allocation must contain exactly the participants");
+    require(!shares.isEmpty(), "Participants required");
+    long sum = 0;
+    for (var entry : shares.entrySet()) {
+        member(entry.getKey());
+        require(entry.getValue() >= 0, "Negative share");
+        sum = Math.addExact(sum, entry.getValue());
+    }
+    require(sum == total, "Invalid strategy result");
+    var expense = new Expense(UUID.randomUUID().toString(), payer, total, shares);
     synchronized (lock) {
         Map<Pair, Long> pending = new HashMap<>();
         for (var entry : shares.entrySet()) {
             if (entry.getKey().equals(payer) || entry.getValue() == 0) continue;
-            var d = debtDelta(entry.getKey(), payer, entry.getValue());
+            var d = delta(entry.getKey(), payer, entry.getValue());
             long next = Math.addExact(balances.getOrDefault(d.pair(), 0L), d.value());
-            require(next != Long.MIN_VALUE); // magnitude must be representable
+            require(next != Long.MIN_VALUE, "Balance magnitude exceeds supported range");
             pending.put(d.pair(), next);
         }
         commit(pending, expense);
@@ -723,7 +947,7 @@ Expense addExpense(String payer, long total, SplitStrategy strategy,
 }
 ```
 
-The returned user IDs must match the requested participants exactly. `validateAllocation` checks nonempty shares, membership, nonnegative integer amounts, and an exact sum. These are the rules the group must enforce even if a strategy contains a bug.
+The checks after `allocate` verify the returned user IDs, membership, nonnegative shares, and exact total. Group enforces these rules even if a strategy contains a bug.
 
 Why calculate `pending` first? In Java, checked arithmetic can fail. If we update Ben's balance and then discover overflow while updating Chen's, we have a partial expense. Preparing every new value before writing prevents that. Each participant produces at most one pair because there is exactly one payer and participants are unique.
 
@@ -736,24 +960,25 @@ The `pending` map contains each pair’s new balance after adding the expense. A
 Python:
 
 ```python
-def commit(self, pending, event):  # private; caller holds the group lock
+def _commit(self, pending, event):
+    # Caller holds the group lock; all domain validation precedes this point.
     for pair, balance in pending.items():
         if balance == 0:
-            self.balances.pop(pair, None)
+            self._balances.pop(pair, None)
         else:
-            self.balances[pair] = balance
-    self.history.append(event)
+            self._balances[pair] = balance
+    self._history.append(event)
 ```
 
 Java:
 
 ```java
 private void commit(Map<Pair, Long> pending, Event event) {
-    // Caller holds the group lock; validation and arithmetic are complete.
-    for (var entry : pending.entrySet()) {
-        if (entry.getValue() == 0) balances.remove(entry.getKey());
-        else balances.put(entry.getKey(), entry.getValue());
-    }
+    // Caller holds lock; domain validation and checked arithmetic are complete.
+    pending.forEach((pair, value) -> {
+        if (value == 0) balances.remove(pair);
+        else balances.put(pair, value);
+    });
     history.add(event);
 }
 ```
@@ -817,34 +1042,35 @@ Python:
 
 ```python
 def record_settlement(self, debtor, creditor, amount):
-    require_positive_integer(amount)
-    self.require_members(debtor, creditor)
-    require(debtor != creditor)
-    pair, direction = debt_delta(debtor, creditor, 1)
-    event = Settlement(new_id(), debtor, creditor, amount)
+    integer(amount, 1)
+    self._require_members(debtor, creditor)
+    if debtor == creditor:
+        raise ValueError("Cannot settle with yourself")
+    pair, direction = self._delta(debtor, creditor, 1)
+    settlement = Settlement(str(uuid4()), debtor, creditor, amount)
 
-    with self.lock:
-        balance = self.balances.get(pair, 0)
+    with self._lock:
+        balance = self._balances.get(pair, 0)
         outstanding = direction * balance
-        require(amount <= outstanding)
-        self.commit({pair: balance - direction * amount}, event)
-    return event
+        if amount > outstanding:
+            raise ValueError("Settlement exceeds debt in this direction")
+        self._commit({pair: balance - direction * amount}, settlement)
+    return settlement
 ```
 
 Java:
 
 ```java
-Settlement recordSettlement(String debtor, String creditor, long amount) {
-    require(amount > 0);
-    requireMembers(debtor, creditor);
-    require(!debtor.equals(creditor));
-    var d = debtDelta(debtor, creditor, 1);
-    var event = new Settlement(newId(), debtor, creditor, amount);
-
+public Settlement recordSettlement(String debtor, String creditor, long amount) {
+    require(amount > 0, "Positive settlement required");
+    member(debtor); member(creditor);
+    require(!debtor.equals(creditor), "Cannot settle with yourself");
+    var d = delta(debtor, creditor, 1);
+    var event = new Settlement(UUID.randomUUID().toString(), debtor, creditor, amount);
     synchronized (lock) {
         long balance = balances.getOrDefault(d.pair(), 0L);
         long outstanding = d.value() * balance;
-        require(amount <= outstanding);
+        require(amount <= outstanding, "Settlement exceeds debt in this direction");
         commit(Map.of(d.pair(), balance - d.value() * amount), event);
     }
     return event;
@@ -863,6 +1089,41 @@ For a positive balance, the lower ID is the debtor. For a negative balance, the 
 
 Return copies of the balances and history as they were when read. These snapshots contain immutable records, so callers cannot change the group through them.
 
+
+Python:
+
+```python
+def get_balances(self):
+    with self._lock:
+        return tuple(
+            Debt(a, b, value) if value > 0 else Debt(b, a, -value)
+            for (a, b), value in sorted(self._balances.items())
+        )
+
+def get_history(self):
+    with self._lock:
+        return tuple(self._history)
+```
+
+Java:
+
+```java
+public List<Debt> getBalances() {
+    synchronized (lock) {
+        List<Debt> result = new ArrayList<>();
+        balances.forEach((pair, value) -> result.add(value > 0
+            ? new Debt(pair.lower(), pair.higher(), value)
+            : new Debt(pair.higher(), pair.lower(), -value)));
+        result.sort(Comparator.comparing(Debt::debtor).thenComparing(Debt::creditor));
+        return List.copyOf(result);
+    }
+}
+
+public List<Event> getHistory() {
+    synchronized (lock) { return List.copyOf(history); }
+}
+```
+
 The caller can keep or display a snapshot after the lock is released. It may become stale as new expenses arrive, which is normal. It cannot corrupt the group's internal state. A change can happen between calls to `getBalances` and `getHistory`. If a caller needs both from the same moment, return them together under one lock.
 
 **Complexity.**
@@ -880,6 +1141,45 @@ Let `k` be expense participants, `b` the group's nonzero debt pairs, and `h` its
 | History snapshot | O(h) | Copies references to immutable records. |
 
 These time estimates treat arithmetic as constant time. With arbitrarily large Python integers, arithmetic also depends on the number of digits. History storage grows with all retained events and their allocations, not just the number of members. Pagination and archival are natural production additions.
+
+### Expense, Settlement, and Debt
+
+These records hold the results returned by Group. Python stores shares as a tuple of pairs. Java copies the shares into an unmodifiable map. Both prevent a caller from changing a saved expense.
+
+Python:
+
+```python
+@dataclass(frozen=True)
+class Expense:
+    id: str
+    payer: str
+    total: int
+    shares: tuple[tuple[str, int], ...]
+
+@dataclass(frozen=True)
+class Settlement:
+    id: str
+    debtor: str
+    creditor: str
+    amount: int
+
+@dataclass(frozen=True)
+class Debt:
+    debtor: str
+    creditor: str
+    amount: int
+```
+
+Java:
+
+```java
+public sealed interface Event permits Expense, Settlement {}
+public record Expense(String id, String payer, long total, Map<String, Long> shares) implements Event {
+    public Expense { shares = Map.copyOf(shares); }
+}
+public record Settlement(String id, String debtor, String creditor, long amount) implements Event {}
+public record Debt(String debtor, String creditor, long amount) {}
+```
 
 ### Complete reference implementations
 

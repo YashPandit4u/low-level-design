@@ -155,7 +155,7 @@ The constructor copies the supplied members and starts with an empty debt map. A
 
 We’ll focus on **Group.addExpense**, which creates debts, and **Group.recordSettlement**, which reduces existing debts. First, we’ll implement `splitEqually` and `addDebt`, the helpers these operations use.
 
-Expense and Debt only store the immutable fields already shown. We’ll briefly explain how to return balances without letting callers change the group’s data.
+We’ll also show the Group constructor, balance reads, and immutable result records so the methods fit together.
 
 Before coding these two methods, we’ll separate the explanation into:
 
@@ -167,6 +167,46 @@ Small helpers only need a brief explanation.
 The Python and Java snippets are pseudocode. `require` rejects invalid input. Result constructors copy the data they receive. Assume amounts fit the chosen integer representation for this first pass. Overflow and concurrent updates are covered in the follow-ups.
 
 ### Group
+
+**Constructor.**
+
+Copy the fixed member list and start with an empty debt map. The small `require` helper raises an error when a validation check fails.
+
+Python:
+
+```python
+def require(condition):
+    if not condition:
+        raise ValueError("Invalid operation")
+
+class Group:
+    def __init__(self, members):
+        users = tuple(members)
+        require(len(users) > 0)
+        require(all(isinstance(uid, str) and uid.strip() for uid in users))
+        require(len(set(users)) == len(users))
+        self.members = frozenset(users)
+        self.debts = {}
+```
+
+Java:
+
+```java
+private final Set<String> members;
+private final Map<Pair, Long> debts = new HashMap<>();
+record Pair(String debtor, String creditor) {}
+
+static void require(boolean condition) {
+    if (!condition) throw new IllegalArgumentException("Invalid operation");
+}
+
+Group(List<String> users) {
+    require(users != null && !users.isEmpty());
+    require(users.stream().allMatch(id -> id != null && !id.isBlank()));
+    require(new HashSet<>(users).size() == users.size());
+    members = Set.copyOf(users);
+}
+```
 
 **Split an expense equally.**
 
@@ -378,7 +418,66 @@ We deliberately don't call `addDebt(creditor, debtor, amount)` here. That helper
 
 `getBalances` returns one fresh `Debt(debtor, creditor, amount)` for every map entry. No signs need interpreting, and no zero entries need filtering. The caller receives a snapshot rather than the mutable map.
 
+
+Python:
+
+```python
+def get_balances(self):
+    return tuple(
+        Debt(debtor, creditor, amount)
+        for (debtor, creditor), amount in self.debts.items()
+    )
+```
+
+Java:
+
+```java
+List<Debt> getBalances() {
+    List<Debt> result = new ArrayList<>();
+    for (var entry : debts.entrySet()) {
+        var pair = entry.getKey();
+        result.add(new Debt(pair.debtor(), pair.creditor(), entry.getValue()));
+    }
+    return List.copyOf(result);
+}
+```
+
 For `k` participants, adding an expense takes O(k log k) for sorting and O(k) expected time for map updates. A settlement takes O(1) expected time. Returning all `b` debts takes O(b), or O(b log b) if the display requires sorted results.
+
+### Expense and Debt
+
+Expense copies the accepted shares. Debt holds one current amount owed. Both are immutable results.
+
+Python:
+
+```python
+@dataclass(frozen=True)
+class Expense:
+    payer: str
+    total: int
+    shares: Mapping[str, int]
+
+    def __post_init__(self):
+        object.__setattr__(self, "shares", MappingProxyType(dict(self.shares)))
+
+@dataclass(frozen=True)
+class Debt:
+    debtor: str
+    creditor: str
+    amount: int
+```
+
+Java:
+
+```java
+record Expense(String payer, long total, Map<String, Long> shares) {
+    Expense { shares = Map.copyOf(shares); }
+}
+
+record Debt(String debtor, String creditor, long amount) {}
+```
+
+Python uses `dataclass` from `dataclasses`, `Mapping` from `typing`, and `MappingProxyType` from `types`. The Java snippets use `java.util.*`.
 
 ### Verification
 
