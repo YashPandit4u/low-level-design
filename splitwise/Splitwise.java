@@ -9,21 +9,30 @@ public final class Splitwise {
     static void validId(String id) {
         require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
     }
-    // Internal allocation behavior; callers supply a split-type string and plain data.
+    static List<String> participantIds(List<String> participants) {
+        require(participants != null && !participants.isEmpty(), "Participants required");
+        participants.forEach(Splitwise::validId);
+        var users = List.copyOf(participants);
+        require(new HashSet<>(users).size() == users.size(), "Duplicate participant");
+        return users;
+    }
+    static Map<String, Long> splitValues(List<String> users, List<Long> values) {
+        require(values != null && values.size() == users.size(), "One value per participant required");
+        for (Long value : values) require(value != null && value >= 0, "Invalid split value");
+        values = List.copyOf(values);
+        Map<String, Long> result = new HashMap<>();
+        for (int i = 0; i < users.size(); i++) result.put(users.get(i), values.get(i));
+        return result;
+    }
+    // Internal stateless algorithms; expense inputs arrive on each call.
     interface SplitStrategy {
-        Map<String, Long> allocate(long total);
+        Map<String, Long> allocate(long total, List<String> participants, List<Long> values);
     }
     static final class EqualSplit implements SplitStrategy {
-        private final List<String> users;
-        public EqualSplit(List<String> participants) {
-            users = List.copyOf(participants);
-            require(!users.isEmpty(), "Participants required");
-            users.forEach(Splitwise::validId);
-            require(new HashSet<>(users).size() == users.size(), "Duplicate participant");
-        }
-        public Map<String, Long> allocate(long total) {
+        public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
             require(total > 0, "Positive total required");
-            var sorted = new ArrayList<>(users);
+            var sorted = new ArrayList<>(participantIds(participants));
+            require(values == null, "Equal splits do not take values");
             Collections.sort(sorted);
             long base = total / sorted.size(), remainder = total % sorted.size();
             Map<String, Long> result = new HashMap<>();
@@ -33,30 +42,23 @@ public final class Splitwise {
         }
     }
     static final class ExactSplit implements SplitStrategy {
-        private final Map<String, Long> amounts;
-        public ExactSplit(Map<String, Long> amounts) { this.amounts = Map.copyOf(amounts); }
-        public Map<String, Long> allocate(long total) {
-            require(total > 0 && !amounts.isEmpty(), "Positive total and participants required");
+        public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
+            require(total > 0, "Positive total required");
+            var amounts = splitValues(participantIds(participants), values);
             long sum = 0;
-            for (var entry : amounts.entrySet()) {
-                validId(entry.getKey());
-                require(entry.getValue() >= 0, "Negative share");
-                sum = Math.addExact(sum, entry.getValue());
-            }
+            for (long amount : amounts.values()) sum = Math.addExact(sum, amount);
             require(sum == total, "Shares must sum to total");
             return amounts;
         }
     }
     static final class PercentageSplit implements SplitStrategy {
-        private final Map<String, Integer> bps;
-        public PercentageSplit(Map<String, Integer> bps) { this.bps = Map.copyOf(bps); }
-        public Map<String, Long> allocate(long total) {
-            require(total > 0 && !bps.isEmpty(), "Positive total and participants required");
+        public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
+            require(total > 0, "Positive total required");
+            var bps = splitValues(participantIds(participants), values);
             long sum = 0;
-            for (var entry : bps.entrySet()) {
-                validId(entry.getKey());
-                require(entry.getValue() >= 0 && entry.getValue() <= 10000, "Invalid percentage");
-                sum += entry.getValue();
+            for (long weight : bps.values()) {
+                require(weight <= 10000, "Invalid percentage");
+                sum += weight;
             }
             require(sum == 10000, "Percentages must sum to 10000 basis points");
             Map<String, Long> shares = new HashMap<>();
@@ -108,10 +110,15 @@ public final class Splitwise {
                     ? new Delta(new Pair(debtor, creditor), amount)
                     : new Delta(new Pair(creditor, debtor), -amount);
         }
-        public Expense addExpense(String payer, long total, SplitStrategy strategy) {
+        public Expense addExpense(String payer, long total, SplitStrategy strategy,
+                                  List<String> participants, List<Long> values) {
             require(total > 0, "Positive total required");
             member(payer);
-            var shares = Map.copyOf(strategy.allocate(total));
+            participants = participantIds(participants);
+            participants.forEach(this::member);
+            values = values == null ? null : new ArrayList<>(values);
+            var shares = Map.copyOf(strategy.allocate(total, participants, values));
+            require(shares.keySet().equals(new HashSet<>(participants)), "Allocation must contain exactly the participants");
             require(!shares.isEmpty(), "Participants required");
             long sum = 0;
             for (var entry : shares.entrySet()) {
@@ -170,6 +177,8 @@ public final class Splitwise {
             synchronized (lock) { return List.copyOf(history); }
         }
     }
+    private final Map<String, SplitStrategy> strategies = Map.of(
+        "EQUAL", new EqualSplit(), "EXACT", new ExactSplit(), "PERCENTAGE", new PercentageSplit());
     private final Map<String, Group> groups;
     public Splitwise(Map<String, List<String>> groupMembers) {
         Map<String, Group> built = new HashMap<>();
@@ -187,33 +196,10 @@ public final class Splitwise {
         var group = group(groupId);
         validId(payer);
         require(total > 0, "Positive total required");
-        require("EQUAL".equals(splitType) || "EXACT".equals(splitType) || "PERCENTAGE".equals(splitType), "Unknown split type");
-        require(participants != null, "Participant list required");
-        participants = List.copyOf(participants);
-        var equal = new EqualSplit(participants); // validates nonempty, unique IDs
-        SplitStrategy strategy;
-        if ("EQUAL".equals(splitType)) {
-            require(values == null, "Equal splits do not take values");
-            strategy = equal;
-        } else {
-            require(values != null && values.size() == participants.size(), "One value per participant required");
-            values = List.copyOf(values);
-            if ("EXACT".equals(splitType)) {
-                Map<String, Long> amounts = new HashMap<>();
-                for (int i = 0; i < participants.size(); i++) amounts.put(participants.get(i), values.get(i));
-                strategy = new ExactSplit(amounts);
-            } else {
-                Map<String, Integer> weights = new HashMap<>();
-                for (int i = 0; i < participants.size(); i++) {
-                    long value = values.get(i);
-                    require(value >= 0 && value <= 10000, "Invalid basis points");
-                    weights.put(participants.get(i), (int) value);
-                }
-                strategy = new PercentageSplit(weights);
-            }
-        }
-        return group.addExpense(payer, total, strategy);
+        require(splitType != null && strategies.containsKey(splitType), "Unknown split type");
+        return group.addExpense(payer, total, strategies.get(splitType), participants, values);
     }
+
     public Settlement recordSettlement(String groupId, String debtor, String creditor, long amount) {
         return group(groupId).recordSettlement(debtor, creditor, amount);
     }

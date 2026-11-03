@@ -127,7 +127,7 @@ Client sends split type, participants, and optional values
         └── Group uses it to produce participant ID → share in paise
 ```
 
-The strategy is used for one calculation. The resulting Expense stores the amounts, not a mutable strategy that might produce different amounts later.
+Group passes the expense inputs into a reusable strategy. The resulting Expense stores the final amounts, so its history stays stable even if the allocation rules change later.
 
 ## Class design
 
@@ -242,7 +242,7 @@ class Group:
     - history: List<Expense | Settlement>
     - lock: Lock
 
-    + addExpense(payer, total, strategy) -> Expense
+    + addExpense(payer, total, strategy, participants, values) -> Expense
     + recordSettlement(debtor, creditor, amount) -> Settlement
     + getBalances() -> List<Debt>
     + getHistory() -> List<Expense | Settlement>
@@ -271,16 +271,18 @@ That gives us a small Strategy interface:
 
 ```text
 interface SplitStrategy:
-    allocate(total) -> Map<UserId, amount>
+    allocate(total, participants, values) -> Map<UserId, amount>
 
-EqualSplit(participants)
-ExactSplit(amountsByUser)
-PercentageSplit(basisPointsByUser)
+EqualSplit()
+ExactSplit()
+PercentageSplit()
 ```
 
-Each strategy copies its configuration when constructed and performs a pure calculation. EqualSplit holds participant IDs. ExactSplit holds proposed amounts. PercentageSplit holds percentages in basis points: `2500` means 25.00%, and `10000` means 100%.
+The strategies have no expense-specific fields. Each call receives the total, participants, and values. Exact values are amounts in paise; percentage values are basis points: `2500` means 25.00%, and `10000` means 100%. Values follow participant order; equal splits use no values.
 
-We'll use separate strategies because allocation is a meaningful behavior to test independently. The cost is three small classes and a service-side selection branch. A small switch or type check is enough; a separate factory hierarchy would add little for three modes. Group accepts the resulting strategy internally, while clients only submit split data.
+This lets the same strategy instance calculate different expenses. A strategy could also hold configuration without violating the pattern or single responsibility. Here, passing expense data into the method makes the separation easier to follow.
+
+We'll use separate strategies because allocation is a meaningful behavior to test independently. The cost is three small classes and a service-side lookup. A small lookup is enough; a separate factory hierarchy would add little for three modes. Group accepts the resulting strategy internally, while clients only submit split data.
 
 Group still validates the returned allocation. It knows membership; the strategy doesn't. It also verifies that shares are nonnegative integers and sum to the total. A new strategy must not be able to create money by returning invalid shares.
 
@@ -317,15 +319,15 @@ Group
   balances: Map<(lowerId, higherId), signed paise>
   history: List<Event>
   lock
-  addExpense(payer, total, strategy) -> Expense
+  addExpense(payer, total, strategy, participants, values) -> Expense
   recordSettlement(debtor, creditor, amount) -> Settlement
   getBalances() -> List<Debt>
   getHistory() -> List<Event>
 
-SplitStrategy.allocate(total) -> Map<UserId, paise>
-  EqualSplit(participants)
-  ExactSplit(amountsByUser)
-  PercentageSplit(basisPointsByUser)
+SplitStrategy.allocate(total, participants, values) -> Map<UserId, paise>
+  EqualSplit()
+  ExactSplit()
+  PercentageSplit()
 
 Event = Expense | Settlement
 Expense(id, payer, total, immutable sharesByUser)
@@ -346,15 +348,15 @@ Those statements give us a concrete standard for deciding whether the code is co
 
 ## Implementation
 
-Start by getting one equal expense all the way through the system. Then add exact and percentage allocation, followed by settlement. That gives you a working flow before spending time on the trickiest rounding rule. Request records can be sketched; allocation and atomic debt updates deserve the implementation time.
+Start by getting one equal expense all the way through the system. Then add exact and percentage allocation, followed by settlement. That gives you a working flow before spending time on the trickiest rounding rule. Result records can be sketched; allocation and atomic debt updates deserve the implementation time.
 
 For the walkthrough below, we'll group the three allocation algorithms together so you can compare them. Keep this example in mind:
 
 ```text
 Asha pays ₹900 for Asha, Ben, and Chen
         ↓ splitType=EQUAL, participants=[A, B, C]
-Service validates the request and constructs EqualSplit
-        ↓ Group calls EqualSplit.allocate
+Service selects its reusable EqualSplit instance
+        ↓ Group calls allocate(90000, [A, B, C], no values)
 shares: Asha ₹300, Ben ₹300, Chen ₹300
         ↓ Group ignores the payer's own share
 Ben owes Asha ₹300; Chen owes Asha ₹300
@@ -382,39 +384,47 @@ Java:
 service.addExpense("trip", "A", 90000, "EQUAL", List.of("A", "B", "C"), null);
 ```
 
-After validating the split type, participant IDs, and value count, the selection is small:
+Create one instance of each algorithm when the service is initialized. Each expense selects one by its split-type string:
 
 Python:
 
 ```python
-if split_type == "EQUAL":
-    strategy = EqualSplit(participants)
-elif split_type == "EXACT":
-    strategy = ExactSplit(dict(zip(participants, values)))
-else:  # PERCENTAGE; unknown types were already rejected
-    strategy = PercentageSplit(dict(zip(participants, values)))
-return group.add_expense(payer, total, strategy)
+# In the service constructor:
+self.strategies = {
+    "EQUAL": EqualSplit(),
+    "EXACT": ExactSplit(),
+    "PERCENTAGE": PercentageSplit(),
+}
+
+# In add_expense, after looking up the group:
+require(split_type in self.strategies)
+strategy = self.strategies[split_type]
+return group.add_expense(payer, total, strategy, participants, values)
 ```
 
 Java:
 
 ```java
-SplitStrategy strategy = switch (splitType) {
-    case "EQUAL" -> new EqualSplit(participants);
-    case "EXACT" -> new ExactSplit(amountsByUser(participants, values));
-    case "PERCENTAGE" -> new PercentageSplit(basisPointsByUser(participants, values));
-    default -> throw new IllegalArgumentException("Unknown split type");
-};
-return group.addExpense(payer, total, strategy);
+private final Map<String, SplitStrategy> strategies = Map.of(
+    "EQUAL", new EqualSplit(),
+    "EXACT", new ExactSplit(),
+    "PERCENTAGE", new PercentageSplit());
+
+// In addExpense, after looking up the group:
+require(splitType != null && strategies.containsKey(splitType));
+SplitStrategy strategy = strategies.get(splitType);
+return group.addExpense(payer, total, strategy, participants, values);
 ```
 
-The map helpers pair each participant with their value; percentage values must be between 0 and 10000 before conversion to Java integers. Reject duplicates and length mismatches before making a map, or entries could be overwritten or silently dropped. The complete implementations include these checks.
+The service selects the algorithm; Group passes the expense inputs to it. Nothing is stored on the strategy between calls.
 
 Group accepts a strategy internally. The public service accepts a split-type string and plain expense data. We don't need a factory class or a request-object hierarchy for this.
 
 ### SplitStrategy
 
-All three strategies return the same result: each participant's share in paise. Let's implement their calculations before connecting them to the group ledger.
+All three strategies implement `allocate(total, participants, values)` and return each participant's share in paise. The snippets below show their method bodies.
+
+The shared `participant_ids` / `participantIds` helper copies and validates a nonempty list of unique user IDs. `split_values` / `splitValues` pairs those IDs with nonnegative integer values, rejecting missing values and length mismatches before building a map. These are small validation helpers, not new classes.
 
 **EqualSplit and the missing paise.**
 
@@ -435,10 +445,9 @@ Sort the participant IDs and give one extra paise to each of the first `remainde
 Python:
 
 ```python
-def allocate(total, participants):
-    require(total > 0)
-    require(participants and no_duplicates(participants))
-    users = sorted(participants)
+def allocate(self, total, participants, values=None):
+    require(total > 0 and values is None)
+    users = sorted(participant_ids(participants))
     base, remainder = divmod(total, len(users))
     return {
         uid: base + (1 if i < remainder else 0)
@@ -449,10 +458,9 @@ def allocate(total, participants):
 Java:
 
 ```java
-Map<String, Long> allocate(long total, List<String> participants) {
-    require(total > 0 && !participants.isEmpty());
-    require(noDuplicates(participants));
-    var users = sortedCopy(participants);
+Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
+    require(total > 0 && values == null);
+    var users = sortedCopy(participantIds(participants));
     long base = total / users.size();
     long remainder = total % users.size();
     Map<String, Long> shares = new HashMap<>();
@@ -472,8 +480,9 @@ Exact splitting is validation, not an allocation algorithm. The caller already s
 Python:
 
 ```python
-def allocate(total, amounts):
-    require(total > 0 and amounts)
+def allocate(self, total, participants, values=None):
+    require(total > 0)
+    amounts = split_values(participant_ids(participants), values)
     require(all(is_integer(x) and x >= 0 for x in amounts.values()))
     require(sum(amounts.values()) == total)
     return dict(amounts)  # defensive copy
@@ -482,8 +491,9 @@ def allocate(total, amounts):
 Java:
 
 ```java
-Map<String, Long> allocate(long total, Map<String, Long> amounts) {
-    require(total > 0 && !amounts.isEmpty());
+Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
+    require(total > 0);
+    var amounts = splitValues(participantIds(participants), values);
     long sum = 0;
     for (long amount : amounts.values()) {
         require(amount >= 0);
@@ -517,8 +527,9 @@ The floors sum to 99. Two paise remain. C gets the first; A wins the tie for the
 Python:
 
 ```python
-def allocate(total, basis_points):
-    require(total > 0 and basis_points)
+def allocate(self, total, participants, values=None):
+    require(total > 0)
+    basis_points = split_values(participant_ids(participants), values)
     require(all(is_integer(w) and w >= 0 for w in basis_points.values()))
     require(sum(basis_points.values()) == 10000)
 
@@ -536,7 +547,8 @@ def allocate(total, basis_points):
 Java:
 
 ```java
-Map<String, Long> allocate(long total, Map<String, Integer> bps) {
+Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
+    var bps = splitValues(participantIds(participants), values);
     validatePositiveTotalAndPercentages(total, bps); // nonempty, sum = 10000
     Map<String, Long> shares = new HashMap<>();
     Map<String, Long> fractions = new HashMap<>();
@@ -606,7 +618,7 @@ We now know how to calculate shares. The next job is to accept all of an expense
 The normal flow is:
 
 1. Validate the payer and total.
-2. Ask the strategy for shares and validate its result.
+2. Copy and validate the expense inputs, pass them to the strategy, and validate its result.
 3. Create an immutable Expense record.
 4. Under the group lock, calculate new balances for affected pairs.
 5. Commit those balances and append the record to history.
@@ -616,10 +628,14 @@ Important failures include an unknown payer, a nonmember participant, an empty a
 Python:
 
 ```python
-def add_expense(self, payer, total, strategy):
+def add_expense(self, payer, total, strategy, participants, values=None):
     require_positive_integer(total)
     self.require_member(payer)
-    shares = dict(strategy.allocate(total))
+    participants = participant_ids(participants)
+    self.require_members(*participants)
+    values = tuple(values) if values is not None else None
+    shares = dict(strategy.allocate(total, participants, values))
+    require(set(shares) == set(participants))
     self.validate_allocation(total, shares)
     expense = Expense(new_id(), payer, total, immutable_copy(shares))
 
@@ -638,10 +654,15 @@ def add_expense(self, payer, total, strategy):
 Java:
 
 ```java
-Expense addExpense(String payer, long total, SplitStrategy strategy) {
+Expense addExpense(String payer, long total, SplitStrategy strategy,
+                   List<String> participants, List<Long> values) {
     require(total > 0);
     requireMember(payer);
-    var shares = Map.copyOf(strategy.allocate(total));
+    participants = participantIds(participants);
+    requireMembers(participants);
+    values = values == null ? null : new ArrayList<>(values);
+    var shares = Map.copyOf(strategy.allocate(total, participants, values));
+    require(shares.keySet().equals(new HashSet<>(participants)));
     validateAllocation(total, shares);
     var expense = new Expense(newId(), payer, total, shares);
 
@@ -660,11 +681,11 @@ Expense addExpense(String payer, long total, SplitStrategy strategy) {
 }
 ```
 
-`validateAllocation` checks nonempty shares, membership, nonnegative integer amounts, and an exact sum. These are the rules the group must enforce even if a strategy contains a bug.
+The returned user IDs must match the requested participants exactly. `validateAllocation` checks nonempty shares, membership, nonnegative integer amounts, and an exact sum. These are the rules the group must enforce even if a strategy contains a bug.
 
 Why calculate `pending` first? In Java, checked arithmetic can fail. If we update Ben's balance and then discover overflow while updating Chen's, we have a partial expense. Preparing every new value before writing prevents that. Each participant produces at most one pair because there is exactly one payer and participants are unique.
 
-Allocation happens outside the lock because it is a pure calculation and membership never changes in this version. Balance updates depend on current state and belong inside. This division keeps the critical section small without weakening correctness.
+The strategy retains no inputs or results, so concurrent calls can safely share its instance. Allocation happens outside the lock because it is a pure calculation and membership never changes in this version. Balance updates depend on current state and belong inside. This division keeps the critical section small without weakening correctness.
 
 **Committing balances and history together.**
 
@@ -924,6 +945,10 @@ Which thread wins is unspecified. The invariant holds either way.
 Replay each expense by adding every nonpayer share to the corresponding pair. Replay each settlement by subtracting its directed amount. Remove zero entries. Compare that reconstructed map with the live balance snapshot.
 
 This checks the relationship between history and balances across a sequence of operations. It is stronger than testing a single helper in isolation. Also verify that operations in one group do not change another group containing the same user IDs.
+
+### Test case 7: reuse a strategy across expenses
+
+Use the same EqualSplit instance for 100 paise among A and B, then 90 paise among B, C, and D. Expect 50 each in the first result and 30 each in the second. Repeat with exact and percentage inputs, including concurrent calls with different participant lists. Each result must depend only on that call's inputs. An invalid call must not affect the next valid one.
 
 ## Extensibility
 

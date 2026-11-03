@@ -6,14 +6,34 @@ public final class SplitwiseTest {
         if (!value) throw new AssertionError();
     }
     public static void main(String[] args) throws Exception {
-        check(new Splitwise.EqualSplit(List.of("C", "A", "B")).allocate(10000)
+        check(new Splitwise.EqualSplit().allocate(10000, List.of("C", "A", "B"), null)
                 .equals(Map.of("A", 3334L, "B", 3333L, "C", 3333L)));
-        check(new Splitwise.PercentageSplit(Map.of("A", 3333, "B", 3333, "C", 3334)).allocate(101)
+        check(new Splitwise.PercentageSplit().allocate(101, List.of("A", "B", "C"), List.of(3333L, 3333L, 3334L))
                 .equals(Map.of("A", 34L, "B", 33L, "C", 34L)));
         for (long total = 1; total <= 300; total++) {
-            var shares = new Splitwise.PercentageSplit(Map.of("A", 3333, "B", 3333, "C", 3334)).allocate(total);
+            var shares = new Splitwise.PercentageSplit().allocate(total, List.of("A", "B", "C"), List.of(3333L, 3333L, 3334L));
             check(shares.values().stream().mapToLong(Long::longValue).sum() == total);
         }
+        List<Splitwise.SplitStrategy> algorithms = List.of(
+            new Splitwise.EqualSplit(), new Splitwise.ExactSplit(), new Splitwise.PercentageSplit());
+        var allocationPool = Executors.newFixedThreadPool(8);
+        try {
+            List<Callable<Boolean>> tasks = new ArrayList<>();
+            for (long i = 1; i <= 100; i++) {
+                final long amount = i;
+                tasks.add(() -> {
+                    var ids = List.of("A" + amount, "B" + amount);
+                    for (int j = 0; j < algorithms.size(); j++) {
+                        List<Long> input = j == 0 ? null : j == 1
+                            ? List.of(amount, amount) : List.of(5000L, 5000L);
+                        check(algorithms.get(j).allocate(2 * amount, ids, input)
+                            .equals(Map.of(ids.get(0), amount, ids.get(1), amount)));
+                    }
+                    return true;
+                });
+            }
+            for (var result : allocationPool.invokeAll(tasks)) check(result.get());
+        } finally { allocationPool.shutdownNow(); }
         var service = new Splitwise(Map.of("trip", List.of("A", "B", "C")));
         var users = new ArrayList<>(List.of("A", "B", "C"));
         check(service.addExpense("trip", "A", 100, "EQUAL", users, null)
@@ -43,8 +63,8 @@ public final class SplitwiseTest {
             }
         }
         var group = new Splitwise.Group(List.of("A", "B", "C"));
-        group.addExpense("A", 90000, new Splitwise.EqualSplit(List.of("A", "B", "C")));
-        group.addExpense("B", 30000, new Splitwise.EqualSplit(List.of("A", "B")));
+        group.addExpense("A", 90000, new Splitwise.EqualSplit(), List.of("A", "B", "C"), null);
+        group.addExpense("B", 30000, new Splitwise.EqualSplit(), List.of("A", "B"), null);
         group.recordSettlement("B", "A", 10000);
         check(group.getBalances().equals(List.of(new Splitwise.Debt("B", "A", 5000), new Splitwise.Debt("C", "A", 30000))));
         var before = group.getHistory();
@@ -56,16 +76,16 @@ public final class SplitwiseTest {
         check(group.getBalances().size() == 1);
 
         var overflow = new Splitwise.Group(List.of("A", "B"));
-        overflow.addExpense("B", Long.MAX_VALUE, new Splitwise.ExactSplit(Map.of("A", Long.MAX_VALUE)));
+        overflow.addExpense("B", Long.MAX_VALUE, new Splitwise.ExactSplit(), List.of("A"), List.of(Long.MAX_VALUE));
         try {
-            overflow.addExpense("B", 1, new Splitwise.ExactSplit(Map.of("A", 1L)));
+            overflow.addExpense("B", 1, new Splitwise.ExactSplit(), List.of("A"), List.of(1L));
             throw new AssertionError("Overflow accepted");
         } catch (ArithmeticException expected) {
             check(overflow.getHistory().size() == 1);
             check(overflow.getBalances().get(0).amount() == Long.MAX_VALUE);
         }
         var concurrent = new Splitwise.Group(List.of("A", "B"));
-        concurrent.addExpense("A", 10000, new Splitwise.ExactSplit(Map.of("B", 10000L)));
+        concurrent.addExpense("A", 10000, new Splitwise.ExactSplit(), List.of("B"), List.of(10000L));
         var barrier = new CyclicBarrier(2);
         var pool = Executors.newFixedThreadPool(2);
         Callable<Boolean> settle = () -> {

@@ -376,21 +376,23 @@ These are follow-up discussions, not features you need to implement before demon
 
 An exact split supplies amounts directly. A percentage split supplies weights and requires another rounding calculation. Neither changes what happens after we have the final shares.
 
-> I'd extract allocation behind `SplitStrategy.allocate(total)`. Group would ask for shares, validate them against membership and the total, then use the same debt-update helper.
+> I'd extract allocation behind `SplitStrategy.allocate(total, participants, values)`. Group would ask for shares, validate them against membership and the total, then use the same debt-update helper.
 
 ```text
-SplitStrategy.allocate(total) -> Map<UserId, paise>
-    EqualSplit(participants)
-    ExactSplit(amountsByUser)
-    PercentageSplit(basisPointsByUser)
+SplitStrategy.allocate(total, participants, values) -> Map<UserId, paise>
+    EqualSplit()
+    ExactSplit()
+    PercentageSplit()
 
-Group.addExpense(payer, total, strategy):
-    shares = strategy.allocate(total)
+Group.addExpense(payer, total, strategy, participants, values):
+    shares = strategy.allocate(total, participants, values)
     validate all shares before changing balances
     apply each nonpayer share using addDebt
 ```
 
 The service accepts `addExpense(groupId, payer, total, splitType, participants, values)`. `splitType` is a string: `"EQUAL"`, `"EXACT"`, or `"PERCENTAGE"`. Exact values are paise; percentage values are basis points, in participant order. Equal splits need no values. Reject duplicate participants and mismatched lengths, then select the internal strategy. No request classes are needed.
+
+These strategies store no expense data; the same instance can handle different expenses. Group passes the inputs into `allocate`.
 
 Now Strategy has a purpose: several calculations share one output contract. A switch in an allocation helper would also work for a fixed set of modes. Separate strategies become useful when we want to test and extend each rule independently.
 

@@ -17,60 +17,62 @@ def user_id(value):
         raise ValueError("ID must be a nonempty ASCII string")
 
 
+def participant_ids(participants):
+    if participants is None or isinstance(participants, (str, bytes)):
+        raise ValueError("Participant list required")
+    users = tuple(participants)
+    if not users:
+        raise ValueError("At least one participant is required")
+    for uid in users:
+        user_id(uid)
+    if len(set(users)) != len(users):
+        raise ValueError("Duplicate participant")
+    return users
+
+
+def split_values(users, values):
+    if values is None or isinstance(values, (str, bytes)):
+        raise ValueError("One value per participant required")
+    values = tuple(values)
+    if len(values) != len(users):
+        raise ValueError("One value per participant required")
+    for value in values:
+        integer(value)
+    return dict(zip(users, values))
+
+
 class SplitStrategy(Protocol):
-    def allocate(self, total: int) -> dict[str, int]: ...
+    def allocate(self, total: int, participants, values=None) -> dict[str, int]: ...
 
 
 class EqualSplit:
-    def __init__(self, participants):
-        self._participants = tuple(participants)
-        if not self._participants:
-            raise ValueError("At least one participant is required")
-        for uid in self._participants:
-            user_id(uid)
-        if len(set(self._participants)) != len(self._participants):
-            raise ValueError("Duplicate participant")
-
-    def allocate(self, total):
+    def allocate(self, total, participants, values=None):
         integer(total, 1)
-        users = sorted(self._participants)
+        users = sorted(participant_ids(participants))
+        if values is not None:
+            raise ValueError("Equal splits do not take values")
         base, remainder = divmod(total, len(users))
         return {uid: base + (i < remainder) for i, uid in enumerate(users)}
 
 
 class ExactSplit:
-    def __init__(self, amounts):
-        self._amounts = dict(amounts)
-
-    def allocate(self, total):
+    def allocate(self, total, participants, values=None):
         integer(total, 1)
-        if not self._amounts:
-            raise ValueError("At least one participant is required")
-        for uid, amount in self._amounts.items():
-            user_id(uid)
-            integer(amount)
-        if sum(self._amounts.values()) != total:
+        amounts = split_values(participant_ids(participants), values)
+        if sum(amounts.values()) != total:
             raise ValueError("Shares must sum to the expense total")
-        return dict(self._amounts)
+        return amounts
 
 
 class PercentageSplit:
     """Integer basis points: 10000 means 100 percent."""
-    def __init__(self, basis_points):
-        self._basis_points = dict(basis_points)
-
-    def allocate(self, total):
+    def allocate(self, total, participants, values=None):
         integer(total, 1)
-        if not self._basis_points:
-            raise ValueError("At least one participant is required")
-        for uid, weight in self._basis_points.items():
-            user_id(uid)
-            integer(weight)
-        if sum(self._basis_points.values()) != 10000:
+        basis_points = split_values(participant_ids(participants), values)
+        if sum(basis_points.values()) != 10000:
             raise ValueError("Percentages must sum to 10000 basis points")
-
         shares, fractions = {}, {}
-        for uid, weight in self._basis_points.items():
+        for uid, weight in basis_points.items():
             shares[uid], fractions[uid] = divmod(total * weight, 10000)
         leftover = total - sum(shares.values())
         order = sorted(shares, key=lambda uid: (-fractions[uid], uid))
@@ -128,11 +130,16 @@ class Group:
             return (debtor, creditor), amount
         return (creditor, debtor), -amount
 
-    def add_expense(self, payer, total, strategy: SplitStrategy):
+    def add_expense(self, payer, total, strategy: SplitStrategy, participants, values=None):
         integer(total, 1)
         self._require_members(payer)
-        # Strategies are trusted pure application components; no shared mutation.
-        shares = dict(strategy.allocate(total))
+        participants = participant_ids(participants)
+        self._require_members(*participants)
+        values = tuple(values) if values is not None else None
+        # Expense inputs are local snapshots; strategies retain no per-call state.
+        shares = dict(strategy.allocate(total, participants, values))
+        if set(shares) != set(participants):
+            raise ValueError("Allocation must contain exactly the participants")
         if not shares:
             raise ValueError("At least one participant is required")
         self._require_members(*shares)
@@ -191,6 +198,8 @@ class Group:
 
 class SplitwiseService:
     def __init__(self, group_members):
+        self._strategies = {"EQUAL": EqualSplit(), "EXACT": ExactSplit(),
+                            "PERCENTAGE": PercentageSplit()}
         for gid in group_members:
             user_id(gid)
         self._groups = {gid: Group(members) for gid, members in group_members.items()}
@@ -205,26 +214,10 @@ class SplitwiseService:
         group = self._group(group_id)
         user_id(payer)
         integer(total, 1)
-        if split_type not in ("EQUAL", "EXACT", "PERCENTAGE"):
+        if not isinstance(split_type, str) or split_type not in self._strategies:
             raise ValueError("Unknown split type")
-        if participants is None or isinstance(participants, (str, bytes)):
-            raise ValueError("Participant list required")
-        participants = tuple(participants)
-        equal = EqualSplit(participants)  # validates nonempty, unique IDs
-        if split_type == "EQUAL":
-            if values is not None:
-                raise ValueError("Equal splits do not take values")
-            strategy = equal
-        else:
-            if values is None:
-                raise ValueError("One value per participant required")
-            values = tuple(values)
-            if len(values) != len(participants):
-                raise ValueError("One value per participant required")
-            details = dict(zip(participants, values))
-            strategy = (ExactSplit(details) if split_type == "EXACT"
-                        else PercentageSplit(details))
-        return group.add_expense(payer, total, strategy)
+        strategy = self._strategies[split_type]
+        return group.add_expense(payer, total, strategy, participants, values)
 
     def record_settlement(self, group_id, debtor, creditor, amount):
         return self._group(group_id).record_settlement(debtor, creditor, amount)
