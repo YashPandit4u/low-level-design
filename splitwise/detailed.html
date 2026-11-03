@@ -995,55 +995,6 @@ Both record success.
 
 
 <p>The caller can keep or display a snapshot after the lock is released. It may become stale as new expenses arrive, which is normal. It cannot corrupt the group's internal state. A change can happen between calls to <code>getBalances</code> and <code>getHistory</code>. If a caller needs both from the same moment, return them together under one lock.</p>
-<p><strong>Complexity.</strong></p>
-<p>Let <code>k</code> be expense participants, <code>b</code> the group's nonzero debt pairs, and <code>h</code> its history length.</p>
-<table>
-<thead>
-<tr>
-<th>Operation</th>
-<th>Time</th>
-<th>Additional observation</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Equal split</td>
-<td>O(k log k)</td>
-<td>Sorting makes remainder allocation deterministic.</td>
-</tr>
-<tr>
-<td>Exact split</td>
-<td>O(k)</td>
-<td>Validate and copy shares.</td>
-</tr>
-<tr>
-<td>Percentage split</td>
-<td>O(k log k)</td>
-<td>Sort by fractional remainder and ID.</td>
-</tr>
-<tr>
-<td>Apply allocation</td>
-<td>O(k) average</td>
-<td>Prepare and update k pairs. Appending history takes amortized O(1).</td>
-</tr>
-<tr>
-<td>Record settlement</td>
-<td>O(1) average</td>
-<td>One pair update and one history append.</td>
-</tr>
-<tr>
-<td>Sorted balance snapshot</td>
-<td>O(b log b)</td>
-<td>O(b) output space.</td>
-</tr>
-<tr>
-<td>History snapshot</td>
-<td>O(h)</td>
-<td>Copies references to immutable records.</td>
-</tr>
-</tbody>
-</table>
-<p>These time estimates treat arithmetic as constant time. With arbitrarily large Python integers, arithmetic also depends on the number of digits. History storage grows with all retained events and their allocations, not just the number of members. Pagination and archival are natural production additions.</p>
 <h3 id="expense-settlement-and-debt_1">Expense, Settlement, and Debt<a aria-label="Link to Expense, Settlement, and Debt" class="heading-anchor" href="#expense-settlement-and-debt_1">#</a></h3>
 <p>These records hold the results returned by Group. Python stores shares as a tuple of pairs. Java copies the shares into an unmodifiable map. Both prevent a caller from changing a saved expense.</p>
 <div class="codebox language-pair" data-code="code-14"><div class="codebar"><div aria-label="Expense, Settlement, and Debt language" role="tablist"><button aria-controls="code-14-python" aria-selected="true" data-lang="python" id="code-14-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-14-java" aria-selected="false" data-lang="java" id="code-14-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-14-python-tab" id="code-14-python" role="tabpanel" tabindex="0"><code><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>

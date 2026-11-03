@@ -1089,22 +1089,6 @@ public List<Event> getHistory() {
 
 The caller can keep or display a snapshot after the lock is released. It may become stale as new expenses arrive, which is normal. It cannot corrupt the group's internal state. A change can happen between calls to `getBalances` and `getHistory`. If a caller needs both from the same moment, return them together under one lock.
 
-**Complexity.**
-
-Let `k` be expense participants, `b` the group's nonzero debt pairs, and `h` its history length.
-
-| Operation | Time | Additional observation |
-| --- | --- | --- |
-| Equal split | O(k log k) | Sorting makes remainder allocation deterministic. |
-| Exact split | O(k) | Validate and copy shares. |
-| Percentage split | O(k log k) | Sort by fractional remainder and ID. |
-| Apply allocation | O(k) average | Prepare and update k pairs. Appending history takes amortized O(1). |
-| Record settlement | O(1) average | One pair update and one history append. |
-| Sorted balance snapshot | O(b log b) | O(b) output space. |
-| History snapshot | O(h) | Copies references to immutable records. |
-
-These time estimates treat arithmetic as constant time. With arbitrarily large Python integers, arithmetic also depends on the number of digits. History storage grows with all retained events and their allocations, not just the number of members. Pagination and archival are natural production additions.
-
 ### Expense, Settlement, and Debt
 
 These records hold the results returned by Group. Python stores shares as a tuple of pairs. Java copies the shares into an unmodifiable map. Both prevent a caller from changing a saved expense.
