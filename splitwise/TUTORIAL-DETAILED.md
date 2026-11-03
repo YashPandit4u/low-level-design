@@ -173,7 +173,7 @@ Reject duplicate participants, unknown split types, and missing or mismatched va
 
 A group needs its members, history, current balances, and a lock. Before writing those fields down, let's decide what a balance means.
 
-#### Option 1: store each person's net position [Bad fit]
+#### Bad Solution: Store each person's net position
 
 Suppose we store:
 
@@ -195,7 +195,7 @@ Both have the same net positions: A owes ₹300, B is net zero, and C should rec
 
 This representation would be reasonable if the interviewer explicitly wanted only simplified net balances. It isn't enough for our current contract.
 
-#### Option 2: store both directions [Good approach]
+#### Good Solution: Store both directions
 
 We could store `balances[A][B] = 300` and `balances[B][A] = -300`. That makes lookup convenient, but every update must preserve the relationship between two entries.
 
@@ -203,7 +203,7 @@ This is a reasonable design if most queries ask for all debts involving one user
 
 Our API asks for the whole group's balances, so that lookup advantage doesn't help us yet. We can keep one copy instead.
 
-#### Option 3: store one signed balance per unordered pair [Recommended]
+#### Great Solution: Store one signed balance per unordered pair
 
 Sort the two immutable user IDs and use the ordered pair as a key. For key `(A, B)`:
 
@@ -699,7 +699,7 @@ No business validation belongs here: a rejection after the first write would lea
 
 #### Concurrency tradeoffs
 
-##### Rely on a thread-safe map [Incorrect]
+##### Bad Solution: Rely on a thread-safe map
 
 A concurrent map can protect individual operations. It doesn't make an entire expense atomic, and it doesn't combine a settlement's validation with its deduction.
 
@@ -712,11 +712,11 @@ Both record success.
 
 We have recorded ₹160 against a ₹100 debt. Depending on the update code, the balance may become negative or one deduction may overwrite the other. Neither result satisfies the contract.
 
-##### One service-wide lock [Good approach]
+##### Good Solution: One service-wide lock
 
 This serializes every group. It is easy to implement, but adding dinner in one group blocks a completely unrelated group's settlement. There is no shared debt state between them, so that coordination is unnecessary.
 
-##### One lock per group [Recommended]
+##### Great Solution: One lock per group
 
 An expense may change several pairs and history together. A group lock covers that whole consistency boundary. Independent groups proceed concurrently, while related operations observe complete updates.
 

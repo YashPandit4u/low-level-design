@@ -93,16 +93,14 @@ def build(detailed=False):
     # Keep comparisons available, but collapse secondary approaches on first load.
     for h in list(soup.find_all(['h4','h5'])):
         text = h.get_text()
-        assessment = re.fullmatch(r'(.*?) \[(Bad fit|Incorrect|Good approach|Recommended)\]', text)
+        assessment = re.match(r'(Bad|Good|Great) Solution: ', text)
         if not assessment: continue
-        title, label = assessment.groups()
-        tone = {'Bad fit': 'bad', 'Incorrect': 'bad', 'Good approach': 'neutral', 'Recommended': 'good'}[label]
+        tone = {'Bad': 'bad', 'Good': 'neutral', 'Great': 'good'}[assessment.group(1)]
         detail = soup.new_tag('details', attrs={'class': 'comparison ' + tone})
-        if label == 'Recommended': detail['open'] = ''
         summary = soup.new_tag('summary')
-        heading = soup.new_tag('span', attrs={'class': 'comparison-title'}); heading.string = title
-        badge = soup.new_tag('span', attrs={'class': 'approach-badge'}); badge.string = label
-        summary.append(heading); summary.append(badge)
+        heading = soup.new_tag('span', attrs={'class': 'comparison-title'}); heading.string = text
+        summary.append(heading)
+        summary.append(frag('<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg>'))
         detail.append(summary)
         body = soup.new_tag('div',attrs={'class':'comparison-body'})
         nxt = h.find_next_sibling()

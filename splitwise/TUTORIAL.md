@@ -95,13 +95,13 @@ There's only one splitting rule so far. A private equal-split helper is enough; 
 
 Start with the questions the API needs to answer. If Ben wants to settle with Asha, we need to know how much **Ben owes Asha**, not just Ben's total debt across the group.
 
-#### Option 1: store only each person's net total [Bad fit]
+#### Bad Solution: Store only each person's net total
 
 A map such as `Ben: -300, Asha: +300` looks convenient. But consider A owing B ₹300 while B owes C ₹300. B's net position is zero even though two direct debts still exist.
 
 Net totals are useful for simplifying payments, but they lose the relationships our settlement rule needs.
 
-#### Option 2: store directed debts [Recommended]
+#### Great Solution: Store directed debts
 
 Use a map keyed by `(debtor, creditor)`, containing only positive amounts:
 
