@@ -265,7 +265,7 @@ apply shares to balances
 
 This works. For three fixed split types, an enum and a helper are defensible. But notice the boundary in that sketch: everything above the blank line decides how much each participant owes; everything below it updates the same ledger, regardless of how those amounts were obtained.
 
-Suppose we add a weighted split for a holiday rental, where one person stayed twice as many nights. The allocation changes, but membership checks, pair netting, history, and settlement rules don't. Separating the calculation lets us add that behavior without editing the ledger code.
+If someone stays twice as long, they might pay twice as much. A new strategy handles that calculation; the code for balances, history, and settlements stays the same.
 
 That gives us a small Strategy interface:
 

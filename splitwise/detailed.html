@@ -326,7 +326,7 @@ else if splitType == PERCENTAGE:
 apply shares to balances
 </code></pre></div>
 <p>This works. For three fixed split types, an enum and a helper are defensible. But notice the boundary in that sketch: everything above the blank line decides how much each participant owes; everything below it updates the same ledger, regardless of how those amounts were obtained.</p>
-<p>Suppose we add a weighted split for a holiday rental, where one person stayed twice as many nights. The allocation changes, but membership checks, pair netting, history, and settlement rules don't. Separating the calculation lets us add that behavior without editing the ledger code.</p>
+<p>If someone stays twice as long, they might pay twice as much. A new strategy handles that calculation; the code for balances, history, and settlements stays the same.</p>
 <p>That gives us a small Strategy interface:</p>
 <div class="codebox"><div class="codebar"><span class="code-title">SplitStrategy</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>interface SplitStrategy:
     allocate(total, participants, values) -&gt; Map&lt;UserId, amount&gt;
