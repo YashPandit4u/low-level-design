@@ -170,7 +170,7 @@ The Python and Java snippets are pseudocode. `require` rejects invalid input. Re
 
 **Constructor.**
 
-Copy the fixed member list and start with an empty debt map. The small `require` helper raises an error when a validation check fails.
+Reject an empty member list, blank IDs, and duplicate members. Copy the accepted IDs and start with an empty debt map. The small `require` helper raises an error when a validation check fails.
 
 Python:
 
@@ -247,6 +247,8 @@ A one-paise expense shared by three people produces shares of 1, 0, and 0. Indiv
 **Net a new obligation.**
 
 Suppose Ben already owes Asha ₹300. An expense now makes Asha owe Ben ₹100. Before adding a new entry, cancel as much as possible against the reverse debt.
+
+Look up the reverse debt and subtract the smaller of the two amounts. Remove the reverse entry if it reaches zero. If any new amount remains, add it to the forward entry. For this example, Ben’s debt falls to ₹200 and no forward entry is needed.
 
 Python:
 
@@ -416,7 +418,7 @@ We deliberately don't call `addDebt(creditor, debtor, amount)` here. That helper
 
 **Read the balances.**
 
-`getBalances` returns one fresh `Debt(debtor, creditor, amount)` for every map entry. No signs need interpreting, and no zero entries need filtering. The caller receives a snapshot rather than the mutable map.
+`getBalances` creates one Debt record for each map entry. An empty map returns an empty collection. Return a copy so the caller cannot edit the group’s balance map. The records are immutable, as shown below.
 
 
 Python:

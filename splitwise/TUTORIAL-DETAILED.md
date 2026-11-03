@@ -372,7 +372,7 @@ We’ll also implement the constructors, shared validation helpers, and read met
 
 We’ll show the service entry point, implement the allocation algorithms, then connect them to Group.
 
-Before coding these two methods, we’ll separate the explanation into:
+For `Group.addExpense` and `Group.recordSettlement`, we’ll separate the explanation into:
 
 1. **Core logic:** the steps for completing a valid operation.
 2. **Edge cases:** inputs to reject and boundary conditions to handle.
@@ -400,6 +400,36 @@ The snippets below use the methods from the runnable Python and Java implementat
 ### SplitwiseService
 
 The service receives a group ID and plain expense data. It finds the group and chooses a strategy. Group performs the balance changes.
+
+**Basic input checks.**
+
+The service and strategies share two checks. IDs must be nonempty ASCII strings. Amounts must be integers at or above the supplied minimum: 1 for expense totals and payments, 0 for individual shares.
+
+Python explicitly rejects booleans because `bool` is a subclass of `int`. Java uses `require` to throw an error when a condition fails. Its money parameters already have type `long`.
+
+Python:
+
+```python
+def integer(value, minimum=0):
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"Expected an integer >= {minimum}")
+
+def user_id(value):
+    if not isinstance(value, str) or not value.strip() or not value.isascii():
+        raise ValueError("ID must be a nonempty ASCII string")
+```
+
+Java:
+
+```java
+static void require(boolean condition, String message) {
+    if (!condition) throw new IllegalArgumentException(message);
+}
+
+static void validId(String id) {
+    require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
+}
+```
 
 **Constructor and group lookup.**
 
@@ -509,41 +539,32 @@ public List<Debt> getBalances(String groupId) { return group(groupId).getBalance
 public List<Event> getHistory(String groupId) { return group(groupId).getHistory(); }
 ```
 
-**Basic input checks.**
+### SplitStrategy
 
-These shared helpers check IDs and amounts. Python explicitly rejects booleans because `bool` is a subclass of `int`. Java method signatures already require integer money values.
+All three strategies implement `allocate(total, participants, values)` and return each participant's share in paise. Each class below implements that interface and keeps no expense data between calls.
+
+The interface gives every strategy the same inputs and output:
 
 Python:
 
 ```python
-def integer(value, minimum=0):
-    if type(value) is not int or value < minimum:
-        raise ValueError(f"Expected an integer >= {minimum}")
-
-def user_id(value):
-    if not isinstance(value, str) or not value.strip() or not value.isascii():
-        raise ValueError("ID must be a nonempty ASCII string")
+class SplitStrategy(Protocol):
+    def allocate(self, total: int, participants, values=None) -> dict[str, int]: ...
 ```
 
 Java:
 
 ```java
-static void require(boolean condition, String message) {
-    if (!condition) throw new IllegalArgumentException(message);
-}
-
-static void validId(String id) {
-    require(id != null && !id.isBlank() && id.chars().allMatch(c -> c < 128), "Invalid ASCII ID");
+interface SplitStrategy {
+    Map<String, Long> allocate(long total, List<String> participants, List<Long> values);
 }
 ```
 
-### SplitStrategy
-
-All three strategies implement `allocate(total, participants, values)` and return each participant's share in paise. Each class below implements that interface and keeps no expense data between calls.
+**Preparing split inputs.**
 
 The `participant_ids` / `participantIds` helper copies the participant list. It checks that the list is nonempty and contains valid, unique IDs.
 
-The `split_values` / `splitValues` helper checks that every participant has one nonnegative integer value. It then builds a map from user ID to value.
+The `split_values` / `splitValues` helper checks that every participant has one nonnegative integer value. It then builds a map from user ID to value. For participants `["A", "B"]` and values `[4000, 6000]`, the result is `{"A": 4000, "B": 6000}`. Checking the lengths first prevents a missing value from being silently dropped.
 
 
 Python:
@@ -590,23 +611,6 @@ static Map<String, Long> splitValues(List<String> users, List<Long> values) {
     Map<String, Long> result = new HashMap<>();
     for (int i = 0; i < users.size(); i++) result.put(users.get(i), values.get(i));
     return result;
-}
-```
-
-The interface gives every strategy the same inputs and output:
-
-Python:
-
-```python
-class SplitStrategy(Protocol):
-    def allocate(self, total: int, participants, values=None) -> dict[str, int]: ...
-```
-
-Java:
-
-```java
-interface SplitStrategy {
-    Map<String, Long> allocate(long total, List<String> participants, List<Long> values);
 }
 ```
 
@@ -661,7 +665,9 @@ Do not silently turn a duplicated participant list into a set. If the input cont
 
 **ExactSplitStrategy.**
 
-Exact splitting is validation, not an allocation algorithm. The caller already supplied the answer.
+For an exact split, the caller supplies each person’s amount. Build the user-to-amount map with the helper, add the amounts, and reject the request if the sum differs from the total. Return the map if it passes.
+
+For a 10,000-paise expense, `[4000, 6000]` is valid. `[4000, 5000]` is not. Zero shares are allowed, but negative shares are rejected by the helper. Java uses checked addition so an overflowing sum also fails.
 
 Python:
 
@@ -690,10 +696,6 @@ static final class ExactSplitStrategy implements SplitStrategy {
 }
 ```
 
-The Java version uses checked addition. If the sum exceeds the range of a Java `long`, reject the operation. Python integers can grow, but we must still reject fractional amounts and booleans.
-
-Reject duplicate user IDs before building the map. Otherwise, one value can overwrite another and hide the duplicate.
-
 **PercentageSplitStrategy and rounding fairly.**
 
 For percentages, independently rounding each result is unsafe. Take 101 paise split 33.33%, 33.33%, and 33.34%. The exact shares are 33.6633, 33.6633, and 33.6734 paise. Rounding each to the nearest paise gives 34 + 34 + 34 = 102. We've charged the group an extra paise.
@@ -709,6 +711,8 @@ For 101 paise split 33.33%, 33.33%, and 33.34%:
 | C | 3334 | 33.6734 | 33 | 6734 |
 
 The floors sum to 99. Two paise remain. C gets the first. A wins the tie for the second. Final shares are A=34, B=33, C=34.
+
+Before calculating, require a positive total and nonnegative weights that sum to 10000 basis points. The shared helpers reject missing values and duplicate users. A 0% share is valid. Java uses `BigInteger` for `total * weight` so that multiplication cannot overflow before we divide by 10000.
 
 Python:
 
@@ -771,11 +775,38 @@ Notice that a 0% participant gets no fractional remainder and no allocation. The
 
 ### Group
 
-The group turns allocations into debts and records settlements. We’ll first show how to turn a debt into a signed balance. Then we’ll implement expenses and settlements using the same group lock.
+Group turns shares into debts and records repayments. Both operations change balances and history. Before implementing them, let’s choose how to protect those changes when requests arrive together.
+
+**Concurrency tradeoffs.**
+
+##### Bad Solution: Rely on a thread-safe map
+
+A concurrent map can protect individual operations. It doesn't make an entire expense atomic, and it doesn't combine a settlement's validation with its deduction.
+
+```text
+Ben owes Asha ₹100.
+Thread 1 checks: ₹100 outstanding, payment of ₹80 is valid.
+Thread 2 checks: ₹100 outstanding, payment of ₹80 is valid.
+Both record success.
+```
+
+We have recorded ₹160 against a ₹100 debt. Depending on the update code, the balance may become negative or one deduction may overwrite the other. Neither result satisfies the contract.
+
+##### Good Solution: One service-wide lock
+
+This allows only one group operation at a time across the entire service. It is easy to implement, but adding dinner in one group blocks a completely unrelated group's settlement. There is no shared debt state between them, so that coordination is unnecessary.
+
+##### Great Solution: One lock per group
+
+An expense may change several pairs and history together. A group lock keeps those changes together. Other operations on that group wait until the update finishes. Operations on different groups can continue.
+
+We could use a lock for each pair of users. But one expense might then need several locks, acquired in a fixed order to avoid deadlocks. We would also need to coordinate history updates and reads. Start with one group lock. Consider smaller locks only if measurements show that waiting on the group lock is a problem.
 
 **Constructor and membership checks.**
 
-A group starts with fixed members, no debts, and an empty history. Copy the member IDs so later changes to the caller’s list cannot change membership. Each group owns its lock.
+A group starts with fixed members, no debts, and an empty history. Reject an empty member list, invalid IDs, and duplicate members. Copy the IDs so later changes to the caller’s list cannot change membership. Each group owns its lock.
+
+The membership helper checks that each supplied ID belongs to this group. Expense creation and settlement call it before changing any balances.
 
 Python:
 
@@ -822,11 +853,11 @@ private void member(String user) {
 }
 ```
 
-The remaining methods belong to Group. The membership helper rejects invalid IDs and users outside this group before their balances can change.
+The remaining methods belong to Group.
 
 **Translating a share into debt.**
 
-Every participant owes their allocated share to the payer, except when the participant is the payer. A helper will sort the two user IDs and choose the sign that represents who owes whom.
+Every participant owes their allocated share to the payer, except when the participant is the payer. A helper will sort the two user IDs and choose the sign that represents who owes whom. It returns both the pair and the signed amount. For example, B owing A 30000 paise becomes `(A, B), -30000`. Callers skip self-debts before using it.
 
 Python:
 
@@ -877,6 +908,10 @@ For example, A paying ₹900 for A, B, and C creates B → A ₹300 and C → A 
 - The payer is the only participant, or some shares are zero: record the expense without creating debts for those shares.
 
 Every rejection must leave balances and history unchanged. For example, shares of ₹300, ₹300, and ₹200 cannot cover a ₹900 expense. We reject that request before writing anything.
+
+Why calculate `pending` first? In Java, checked arithmetic can fail. If we update Ben's balance and then discover overflow while updating Chen's, we have a partial expense. Preparing every new value before writing prevents that. Each participant produces at most one pair because there is exactly one payer and participants are unique.
+
+The strategy retains no inputs or results, so concurrent calls can safely share its instance. Allocation happens outside the lock because it is a pure calculation and membership never changes in this version. Balance updates depend on current state and belong inside. That lets other operations use the group while shares are being calculated.
 
 Python:
 
@@ -949,13 +984,11 @@ public Expense addExpense(String payer, long total, SplitStrategy strategy,
 
 The checks after `allocate` verify the returned user IDs, membership, nonnegative shares, and exact total. Group enforces these rules even if a strategy contains a bug.
 
-Why calculate `pending` first? In Java, checked arithmetic can fail. If we update Ben's balance and then discover overflow while updating Chen's, we have a partial expense. Preparing every new value before writing prevents that. Each participant produces at most one pair because there is exactly one payer and participants are unique.
-
-The strategy retains no inputs or results, so concurrent calls can safely share its instance. Allocation happens outside the lock because it is a pure calculation and membership never changes in this version. Balance updates depend on current state and belong inside. That lets other operations use the group while shares are being calculated.
-
 **Committing balances and history together.**
 
-The `pending` map contains each pair’s new balance after adding the expense. All calculations are finished. We now store those balances and append the history record:
+Both expenses and settlements use this helper. The caller already holds the group lock and has finished all validation and arithmetic.
+
+The `pending` map contains the new balance for each affected pair. Remove entries whose new balance is zero. Store the other balances, then append the event to history. The helper does not acquire the lock again:
 
 Python:
 
@@ -986,31 +1019,6 @@ private void commit(Map<Pair, Long> pending, Event event) {
 All validation must finish before this method runs. Rejecting an expense after the first write could leave some balances changed. Reads use the same lock, so they wait until both balances and history are updated.
 
 The lock does not protect us from a process crash. Saving these changes safely to a database requires a transaction, which we’ll discuss in the follow-ups.
-
-**Concurrency tradeoffs.**
-
-##### Bad Solution: Rely on a thread-safe map
-
-A concurrent map can protect individual operations. It doesn't make an entire expense atomic, and it doesn't combine a settlement's validation with its deduction.
-
-```text
-Ben owes Asha ₹100.
-Thread 1 checks: ₹100 outstanding, payment of ₹80 is valid.
-Thread 2 checks: ₹100 outstanding, payment of ₹80 is valid.
-Both record success.
-```
-
-We have recorded ₹160 against a ₹100 debt. Depending on the update code, the balance may become negative or one deduction may overwrite the other. Neither result satisfies the contract.
-
-##### Good Solution: One service-wide lock
-
-This allows only one group operation at a time across the entire service. It is easy to implement, but adding dinner in one group blocks a completely unrelated group's settlement. There is no shared debt state between them, so that coordination is unnecessary.
-
-##### Great Solution: One lock per group
-
-An expense may change several pairs and history together. A group lock keeps those changes together. Other operations on that group wait until the update finishes. Operations on different groups can continue.
-
-We could use a lock for each pair of users. But one expense might then need several locks, acquired in a fixed order to avoid deadlocks. We would also need to coordinate history updates and reads. Start with one group lock. Consider smaller locks only if measurements show that waiting on the group lock is a problem.
 
 **Group.recordSettlement.**
 
@@ -1087,7 +1095,9 @@ Reads use the same group lock. Otherwise a balance query could see Ben's updated
 
 For a positive balance, the lower ID is the debtor. For a negative balance, the higher ID is the debtor. In either case, return a Debt record with a positive amount.
 
-Return copies of the balances and history as they were when read. These snapshots contain immutable records, so callers cannot change the group through them.
+`getBalances` converts each stored pair into a Debt record and returns the records in a stable order. An empty balance map produces an empty result.
+
+`getHistory` copies the history in the order events were accepted. Both methods hold the group lock while copying. The returned records are immutable, so callers cannot change group data through them.
 
 
 Python:
