@@ -60,7 +60,9 @@
   $('#focus').addEventListener('click',()=>focusMode(true));$('#exit-focus').addEventListener('click',()=>focusMode(false));
   $('#expand').addEventListener('click',()=>{const on=$('#expand').getAttribute('aria-pressed')!=='true';$$('details.comparison').forEach(d=>d.open=on);$('#expand').setAttribute('aria-pressed',on);$('#expand').textContent=on?'Collapse comparisons':'Expand comparisons';});
   if(read('splitwise-theme')==='dark')document.documentElement.classList.add('dark');
-  $('#theme').addEventListener('click',()=>{const dark=document.documentElement.classList.toggle('dark');save('splitwise-theme',dark?'dark':'light');});
+  function updateThemeControl(){const label=document.documentElement.classList.contains('dark')?'Switch to light mode':'Switch to dark mode';$('#theme').setAttribute('aria-label',label);$('#theme').title=label;}
+  updateThemeControl();
+  $('#theme').addEventListener('click',()=>{const dark=document.documentElement.classList.toggle('dark');save('splitwise-theme',dark?'dark':'light');updateThemeControl();});
   const dialog=$('#search-dialog');
   function results(){const query=$('#search-input').value.toLowerCase();$('#search-results').replaceChildren();links.filter(a=>a.textContent.toLowerCase().includes(query)).forEach(a=>{const link=a.cloneNode(true);link.removeAttribute('class');link.addEventListener('click',()=>dialog.close());$('#search-results').append(link);});if(!$('#search-results').children.length)$('#search-results').textContent='No matching sections.';}
   $('.search-trigger').addEventListener('click',()=>{dialog.showModal();results();$('#search-input').focus();});

@@ -46,11 +46,22 @@ article{padding-right:0;overflow-wrap:break-word}
 @media (prefers-reduced-motion: no-preference){
   html{scroll-behavior:smooth}
 }
+
+/* Consistent, restrained header controls with vector icons. */
+.search-trigger{height:38px;width:248px;padding:0 10px 0 12px;border:1px solid var(--border);border-radius:9px;background:var(--soft);color:var(--muted);font-size:13px;font-weight:500;line-height:20px;gap:20px;transition:background .15s,border-color .15s,color .15s}
+.search-label{display:flex;align-items:center;gap:9px;white-space:nowrap}
+.search-trigger svg,#theme svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.search-trigger kbd{font:11px/20px OpenSans,Arial,sans-serif;letter-spacing:.02em;color:var(--muted);border:1px solid var(--border);border-radius:4px;background:var(--paper);padding:0 5px;white-space:nowrap}
+.search-trigger:hover,#theme:hover{background:var(--primary-soft);border-color:var(--primary);color:var(--text)}
+#theme{width:38px;height:38px;display:grid;place-items:center;padding:0;border:1px solid var(--border);border-radius:9px;background:var(--paper);color:var(--muted);transition:background .15s,border-color .15s,color .15s}
+#theme .theme-sun{display:none}.dark #theme .theme-moon{display:none}.dark #theme .theme-sun{display:block}
+@media(max-width:767px){.search-trigger{width:210px;max-width:calc(100vw - 100px);height:36px;gap:12px}#theme{width:36px;height:36px}.search-trigger kbd{display:none}}
+@media(prefers-reduced-motion:reduce){.search-trigger,#theme{transition:none}}
 </style></head><body>
     <a class="skip" href="#article">Skip to article</a>
 
-    <main class="main" id="top"><header class="topbar"><button class="search-trigger" aria-label="Search article sections"><span>⌕ &nbsp; Search</span><kbd>⌘K</kbd></button><div class="top-actions"><a class="article-home" href="#top">Low Level Design <span>/</span> Splitwise</a><button id="theme" aria-label="Toggle dark mode">☼</button></div></header>
-    <div class="outer"><div class="layout"><article id="article"><div class="article-header"><div class="eyebrow">Common Problems</div><h1>Splitwise</h1><p class="metadata">Independent study article <span>·</span> <span class="difficulty">◉ medium</span> <span>·</span> Python &amp; Java <span>·</span> Detailed edition</p><nav class="editions" aria-label="Article version"><a href="index.html" aria-current="page">Detailed</a><a href="simplified.html">Simplified</a></nav></div><div class="feature-card green"><span class="feature-icon">⌘</span><div><h2>Complete Code Implementation</h2><p>Read the working solution in your preferred language</p></div><a href="#complete-reference-implementations">View Code &nbsp; →</a></div><div class="feature-card coral"><span class="feature-icon">≋</span><div><h2>Explore the Design Trade-offs</h2><p>Compare approaches and understand the decisions</p></div><a href="#group-and-balance-representation">Compare &nbsp; →</a></div>
+    <main class="main" id="top"><header class="topbar"><button class="search-trigger" aria-label="Search article sections"><span class="search-label"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.75" cy="10.75" r="6.75"/><path d="m16 16 4.25 4.25"/></svg><span>Search sections</span></span><kbd>⌘ K</kbd></button><div class="top-actions"><a class="article-home" href="#top">Low Level Design <span>/</span> Splitwise</a><button id="theme" aria-label="Switch to dark mode" title="Switch to dark mode"><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13.1A8.5 8.5 0 0 1 10.9 3.5 8.5 8.5 0 1 0 20.5 13.1Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg></button></div></header>
+    <div class="outer"><div class="layout"><article id="article"><div class="article-header"><div class="eyebrow">Low Level Design</div><h1>Splitwise</h1><p class="metadata">Independent study article <span>·</span> <span class="difficulty">◉ medium</span> <span>·</span> Python &amp; Java <span>·</span> Detailed edition</p><nav class="editions" aria-label="Article version"><a href="index.html" aria-current="page">Detailed</a><a href="simplified.html">Simplified</a></nav></div><div class="feature-card green"><span class="feature-icon">⌘</span><div><h2>Complete Code Implementation</h2><p>Read the working solution in your preferred language</p></div><a href="#complete-reference-implementations">View Code &nbsp; →</a></div><div class="feature-card coral"><span class="feature-icon">≋</span><div><h2>Explore the Design Trade-offs</h2><p>Compare approaches and understand the decisions</p></div><a href="#group-and-balance-representation">Compare &nbsp; →</a></div>
     
 <h2 id="understanding-the-problem">Understanding the Problem<a aria-label="Link to Understanding the Problem" class="heading-anchor" href="#understanding-the-problem">#</a></h2>
 <p class="callout intro"><strong class="callout-title">💸 What is an expense-sharing system?</strong>An expense-sharing system records money people spend on behalf of a group and tracks who owes whom. If Asha pays ₹900 for dinner shared equally with Ben and Chen, Ben owes Asha ₹300 and Chen owes Asha ₹300. Asha's own ₹300 share creates no debt.</p>
@@ -1336,7 +1347,9 @@ Delete expense:  (A,B) += 10000     A now owes B ₹100
   $('#focus').addEventListener('click',()=>focusMode(true));$('#exit-focus').addEventListener('click',()=>focusMode(false));
   $('#expand').addEventListener('click',()=>{const on=$('#expand').getAttribute('aria-pressed')!=='true';$$('details.comparison').forEach(d=>d.open=on);$('#expand').setAttribute('aria-pressed',on);$('#expand').textContent=on?'Collapse comparisons':'Expand comparisons';});
   if(read('splitwise-theme')==='dark')document.documentElement.classList.add('dark');
-  $('#theme').addEventListener('click',()=>{const dark=document.documentElement.classList.toggle('dark');save('splitwise-theme',dark?'dark':'light');});
+  function updateThemeControl(){const label=document.documentElement.classList.contains('dark')?'Switch to light mode':'Switch to dark mode';$('#theme').setAttribute('aria-label',label);$('#theme').title=label;}
+  updateThemeControl();
+  $('#theme').addEventListener('click',()=>{const dark=document.documentElement.classList.toggle('dark');save('splitwise-theme',dark?'dark':'light');updateThemeControl();});
   const dialog=$('#search-dialog');
   function results(){const query=$('#search-input').value.toLowerCase();$('#search-results').replaceChildren();links.filter(a=>a.textContent.toLowerCase().includes(query)).forEach(a=>{const link=a.cloneNode(true);link.removeAttribute('class');link.addEventListener('click',()=>dialog.close());$('#search-results').append(link);});if(!$('#search-results').children.length)$('#search-results').textContent='No matching sections.';}
   $('.search-trigger').addEventListener('click',()=>{dialog.showModal();results();$('#search-input').focus();});
