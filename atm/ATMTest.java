@@ -1,0 +1,124 @@
+import java.util.*;
+import java.util.concurrent.*;
+
+public final class ATMTest {
+    static class Bank implements ATM.BankGateway {
+        long funds = 100000;
+        Map<String, Long> holds = new HashMap<>();
+        String fail = "";
+        public String authenticate(String card, String pin) {
+            return card.equals("card-A") && pin.equals("1234") ? "account-A" : null;
+        }
+        public long availableBalance(String account) {
+            return funds - holds.values().stream().mapToLong(Long::longValue).sum();
+        }
+        public boolean hold(String account, long amount, String id) {
+            if (amount > availableBalance(account)) return false;
+            holds.put(id, amount);
+            if (fail.equals("hold")) throw new RuntimeException();
+            return true;
+        }
+        public void capture(String id) {
+            if (fail.equals("capture")) throw new RuntimeException();
+            funds -= holds.remove(id);
+        }
+        public void release(String id) {
+            if (fail.equals("release")) throw new RuntimeException();
+            holds.remove(id);
+        }
+    }
+    static class Device implements ATM.Hardware {
+        String outcome = "ALL";
+        int calls, ejections;
+        boolean ejectFails;
+        public String dispense(Map<Long, Integer> notes) {
+            calls++;
+            if (outcome.equals("TIMEOUT")) throw new RuntimeException();
+            return outcome;
+        }
+        public void ejectCard() {
+            ejections++;
+            if (ejectFails) throw new RuntimeException();
+        }
+    }
+    static void check(boolean condition) {
+        if (!condition) throw new AssertionError();
+    }
+    static ATM ready(Bank bank, Device device) {
+        ATM atm = new ATM(bank, device, Map.of(50000L, 1, 20000L, 3), 100000);
+        atm.insertCard("card-A");
+        check(atm.enterPin("1234"));
+        return atm;
+    }
+    public static void main(String[] args) throws Exception {
+        Bank bank = new Bank(); Device device = new Device();
+        ATM atm = ready(bank, device);
+        check(atm.withdraw(60000).equals("SUCCESS"));
+        check(atm.balance() == 40000 && atm.cashSnapshot().get(20000L) == 0);
+        atm.cancel();
+        check(atm.state().equals("IDLE") && device.ejections == 1);
+        atm.insertCard("card-A");
+        for (int i = 0; i < 3; i++) check(!atm.enterPin("bad"));
+        check(atm.state().equals("IDLE"));
+
+        for (String outcome : List.of("NONE", "UNKNOWN", "TIMEOUT")) {
+            bank = new Bank(); device = new Device(); atm = ready(bank, device);
+            device.outcome = outcome;
+            String result = atm.withdraw(20000);
+            if (outcome.equals("NONE")) {
+                check(result.equals("NOT_DISPENSED") && bank.holds.isEmpty());
+            } else {
+                check(result.equals("PENDING_REVIEW") && !bank.holds.isEmpty());
+                check(atm.state().equals("OUT_OF_SERVICE"));
+                atm.cancel();
+                check(atm.state().equals("OUT_OF_SERVICE"));
+            }
+            check(atm.cashSnapshot().get(20000L) == 3);
+        }
+        for (String stage : List.of("hold", "capture", "release")) {
+            bank = new Bank(); device = new Device(); atm = ready(bank, device);
+            bank.fail = stage;
+            if (stage.equals("release")) device.outcome = "NONE";
+            check(atm.withdraw(20000).equals("PENDING_REVIEW"));
+            check(atm.pendingOperation() != null && atm.state().equals("OUT_OF_SERVICE"));
+            check(atm.cashSnapshot().get(20000L) == (stage.equals("capture") ? 2 : 3));
+        }
+        bank = new Bank(); device = new Device(); atm = ready(bank, device);
+        check(atm.withdraw(10000).equals("CASH_UNAVAILABLE") && bank.holds.isEmpty());
+        bank.funds = 10000;
+        check(atm.withdraw(20000).equals("DECLINED") && device.calls == 0);
+        for (long amount : new long[]{0, -1, 100001}) {
+            try { atm.withdraw(amount); throw new AssertionError(); }
+            catch (IllegalArgumentException expected) { }
+        }
+        device.ejectFails = true; atm.cancel();
+        check(atm.state().equals("OUT_OF_SERVICE"));
+
+        Bank concurrentBank = new Bank(); Device concurrentDevice = new Device();
+        ATM shared = new ATM(concurrentBank, concurrentDevice, Map.of(20000L, 1), 100000);
+        shared.insertCard("card-A"); shared.enterPin("1234");
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(() -> shared.withdraw(20000));
+            var second = pool.submit(() -> shared.withdraw(20000));
+            check(Set.of(first.get(), second.get()).equals(Set.of("SUCCESS", "CASH_UNAVAILABLE")));
+        }
+        check(concurrentBank.funds == 80000);
+        for (int a=0; a<3; a++) for (int b=0; b<3; b++) for (int c=0; c<3; c++) {
+            var inventory = Map.of(5L, a, 3L, b, 2L, c);
+            var cash = new ATM.CashInventory(inventory);
+            Set<Long> possible = new HashSet<>();
+            for (int x=0; x<=a; x++) for (int y=0; y<=b; y++) for (int z=0; z<=c; z++)
+                possible.add(5L*x + 3L*y + 2L*z);
+            for (long amount=1; amount<=20; amount++) {
+                var plan = cash.plan(amount);
+                check((plan != null) == possible.contains(amount));
+                if (plan != null) {
+                    check(plan.entrySet().stream().mapToLong(e -> e.getKey()*e.getValue()).sum() == amount);
+                    plan.forEach((d,n) -> check(n > 0 && n <= inventory.get(d)));
+                }
+            }
+            check(cash.snapshot().equals(inventory));
+        }
+        System.out.println("ATM Java scenarios passed, including 540 allocation checks.");
+    }
+}

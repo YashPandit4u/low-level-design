@@ -34,3 +34,7 @@ java SplitwiseTest
 ```
 
 The reading interface was inspired by Hello Interview. This is an independent study article. Open Sans is distributed under the SIL Open Font License; see `splitwise/assets/OFL.txt`.
+
+## ATM
+
+[Read the ATM article](https://yashpandit4u.github.io/low-level-design/atm/) · [Source and tests](atm/)
