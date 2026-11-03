@@ -153,7 +153,9 @@ The constructor copies the supplied members and starts with an empty debt map. A
 
 ## Implementation
 
-The interesting methods are `addExpense` and `recordSettlement`. We'll implement their helpers along the way, then trace dinner, breakfast, and repayment through the whole design.
+We'll focus on **Group.addExpense** and **Group.recordSettlement**: one creates debts, while the other can only reduce an existing debt. The `splitEqually` and `addDebt` helpers contain the reusable calculations, so we'll implement those first. Expense and Debt need only the immutable fields already shown; balance reads need a short explanation.
+
+Before coding each main operation, we'll walk through a success and a rejection. The helpers don't need that extra ceremony.
 
 The Python and Java snippets are pseudocode. `require` rejects invalid input; result constructors make defensive copies. Assume amounts fit the chosen integer representation for this first pass. Overflow and concurrent updates are covered in the follow-ups.
 
@@ -243,7 +245,13 @@ This helper is private. Its callers supply distinct members and nonnegative amou
 
 **Add the expense.**
 
-Now the public operation has a short flow: validate, calculate shares, and add each nonpayer's obligation to the payer.
+Suppose A pays ₹900 for A, B, and C, starting with no debts:
+
+1. Validate the payer, positive total, and nonempty list of unique group members.
+2. Calculate ₹300 per participant and create the Expense result.
+3. Add B → A ₹300 and C → A ₹300; skip A's own share, then return the expense.
+
+If C isn't a member, reject the request at step 1. B's debt must remain unchanged too, which is why we validate every participant before updating anyone's balance.
 
 Python:
 
@@ -290,6 +298,14 @@ All input validation happens before the first balance change. Don't validate par
 **Record a settlement.**
 
 A settlement reduces an existing debt. It must not create a new obligation or flip its direction.
+
+Suppose B owes A ₹150 and pays back ₹100:
+
+1. Validate both members and a positive payment amount.
+2. Read B's debt to A and check that the payment does not exceed it.
+3. Store the remaining ₹50. If the payment clears the debt, remove the entry.
+
+A ₹200 payment fails at step 2, leaving the ₹150 debt untouched. A payment from A to B also fails because there is no debt in that direction.
 
 Python:
 

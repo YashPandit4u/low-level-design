@@ -402,7 +402,14 @@ Debt(debtor: String, creditor: String, amount: long)
 </ol>
 <p>Those statements give us a concrete standard for deciding whether the code is correct.</p>
 <h2 id="implementation">Implementation<a aria-label="Link to Implementation" class="heading-anchor" href="#implementation">#</a></h2>
-<p>Start by getting one equal expense all the way through the system. Then add exact and percentage allocation, followed by settlement. That gives you a working flow before spending time on the trickiest rounding rule. Result records can be sketched; allocation and atomic debt updates deserve the implementation time.</p>
+<p>We don't need to spend equal time implementing every class. The important methods are the ones that calculate shares or change debts:</p>
+<ul>
+<li><strong>SplitStrategy.allocate:</strong> implement equal, exact, and percentage splits. Getting the total right, especially after rounding, is the interesting part.</li>
+<li><strong>Group.addExpense:</strong> validate the expense, calculate shares, and update balances and history together.</li>
+<li><strong>Group.recordSettlement:</strong> check the current debt before reducing it. A rejected payment must leave the group unchanged.</li>
+<li><strong>SplitwiseService:</strong> sketch the split-type lookup and delegation. Expense, Settlement, and Debt only need the immutable fields already defined; getters need snapshot behavior, not a full walkthrough.</li>
+</ul>
+<p>We'll show the service entry point, implement the allocation algorithms, then connect them to Group. Before coding the two Group mutations, we'll trace a successful operation and a rejection. Small helpers only need a brief explanation.</p>
 <p>For the walkthrough below, we'll group the three allocation algorithms together so you can compare them. Keep this example in mind:</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Implementation</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Asha pays ₹900 for Asha, Ben, and Chen
         ↓ splitType=EQUAL, participants=[A, B, C]
@@ -622,15 +629,14 @@ Total: 10000
 <p>Callers exclude self-debts before using this helper. Keeping the sign conversion in one place prevents expenses and settlements from developing subtly different conventions.</p>
 <p><strong>Group.addExpense.</strong></p>
 <p>We now know how to calculate shares. The next job is to accept all of an expense together. If Ben's debt changes but Chen's doesn't, we haven't recorded a smaller expense; we've recorded a broken one.</p>
-<p>The normal flow is:</p>
+<p>For a ₹900 expense paid by A for A, B, and C, starting with no debts:</p>
 <ol>
-<li>Validate the payer and total.</li>
-<li>Copy and validate the expense inputs, pass them to the strategy, and validate its result.</li>
-<li>Create an immutable Expense record.</li>
-<li>Under the group lock, calculate new balances for affected pairs.</li>
-<li>Commit those balances and append the record to history.</li>
+<li>Check the payer, total, and participant list; all three users must belong to the group.</li>
+<li>Pass the expense inputs to the equal-split strategy. It returns ₹300 each. Check that the returned users and total match the request.</li>
+<li>Create the Expense record. Under the group lock, prepare B → A ₹300 and C → A ₹300; A's own share creates no debt.</li>
+<li>Commit both balances and append the expense to history, then return it.</li>
 </ol>
-<p>Important failures include an unknown payer, a nonmember participant, an empty allocation, a negative share, and a total mismatch. None should alter the group.</p>
+<p>Now try an exact split of ₹900 with shares of ₹300, ₹300, and ₹200. The strategy rejects the ₹800 sum before any balance or history changes. A nonmember is rejected even earlier. If preparing a new balance overflows in Java, nothing is committed either. That's why validation and calculation come before writes.</p>
 <div class="codebox language-pair" data-code="code-7"><div class="codebar"><div aria-label="Group language" role="tablist"><button aria-controls="code-7-python" aria-selected="true" data-lang="python" id="code-7-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-7-java" aria-selected="false" data-lang="java" id="code-7-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-7-python-tab" id="code-7-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">add_expense</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">payer</span><span class="p">,</span> <span class="n">total</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">participants</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="n">require_positive_integer</span><span class="p">(</span><span class="n">total</span><span class="p">)</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">require_member</span><span class="p">(</span><span class="n">payer</span><span class="p">)</span>
@@ -722,6 +728,13 @@ Both record success.
 
 <p><strong>Group.recordSettlement.</strong></p>
 <p>A settlement is not a negative expense. It has its own rule: there must already be enough debt in the requested direction.</p>
+<p>Suppose B owes A ₹150 and records a ₹100 payment:</p>
+<ol>
+<li>Check that B and A are distinct group members and the amount is positive.</li>
+<li>Under the group lock, read B's current debt to A and verify that ₹100 does not exceed it.</li>
+<li>Reduce the debt to ₹50 and append the settlement to history before releasing the lock.</li>
+</ol>
+<p>If B instead submits ₹200, reject it at step 2: the debt stays ₹150 and no settlement is recorded. A payment in the reverse direction is also rejected. The debt check and update share the lock so another settlement cannot change the amount between them.</p>
 <p>We convert the direction into <code>+1</code> or <code>-1</code>, then interpret the stored balance through it. If <code>(A, B)</code> stores <code>-15000</code>, B owes A ₹150. For B paying A, the direction is <code>-1</code>, so the outstanding amount is <code>(-1) × (-15000) = 15000</code>.</p>
 <div class="codebox language-pair" data-code="code-9"><div class="codebar"><div aria-label="Group language" role="tablist"><button aria-controls="code-9-python" aria-selected="true" data-lang="python" id="code-9-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-9-java" aria-selected="false" data-lang="java" id="code-9-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-9-python-tab" id="code-9-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">record_settlement</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">debtor</span><span class="p">,</span> <span class="n">creditor</span><span class="p">,</span> <span class="n">amount</span><span class="p">):</span>
     <span class="n">require_positive_integer</span><span class="p">(</span><span class="n">amount</span><span class="p">)</span>

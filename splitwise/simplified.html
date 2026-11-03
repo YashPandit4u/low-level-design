@@ -204,7 +204,8 @@ Debt
 </code></pre></div>
 <p>The constructor copies the supplied members and starts with an empty debt map. All public mutations go through Group. The two helpers isolate the only calculations we need: dividing an expense and netting obligations.</p>
 <h2 id="implementation">Implementation<a aria-label="Link to Implementation" class="heading-anchor" href="#implementation">#</a></h2>
-<p>The interesting methods are <code>addExpense</code> and <code>recordSettlement</code>. We'll implement their helpers along the way, then trace dinner, breakfast, and repayment through the whole design.</p>
+<p>We'll focus on <strong>Group.addExpense</strong> and <strong>Group.recordSettlement</strong>: one creates debts, while the other can only reduce an existing debt. The <code>splitEqually</code> and <code>addDebt</code> helpers contain the reusable calculations, so we'll implement those first. Expense and Debt need only the immutable fields already shown; balance reads need a short explanation.</p>
+<p>Before coding each main operation, we'll walk through a success and a rejection. The helpers don't need that extra ceremony.</p>
 <p>The Python and Java snippets are pseudocode. <code>require</code> rejects invalid input; result constructors make defensive copies. Assume amounts fit the chosen integer representation for this first pass. Overflow and concurrent updates are covered in the follow-ups.</p>
 <h3 id="group_1">Group<a aria-label="Link to Group" class="heading-anchor" href="#group_1">#</a></h3>
 <p><strong>Split an expense equally.</strong></p>
@@ -270,7 +271,13 @@ Debt
 <p>For the example, <code>cancelled</code> is ₹100, leaving Ben owing Asha ₹200. If the new obligation is ₹400, cancellation uses up Ben's entire ₹300 debt, then records Asha owing Ben the remaining ₹100.</p>
 <p>This helper is private. Its callers supply distinct members and nonnegative amounts, and the map already satisfies the one-direction-per-pair rule. Keeping cancellation here means every expense follows the same rule.</p>
 <p><strong>Add the expense.</strong></p>
-<p>Now the public operation has a short flow: validate, calculate shares, and add each nonpayer's obligation to the payer.</p>
+<p>Suppose A pays ₹900 for A, B, and C, starting with no debts:</p>
+<ol>
+<li>Validate the payer, positive total, and nonempty list of unique group members.</li>
+<li>Calculate ₹300 per participant and create the Expense result.</li>
+<li>Add B → A ₹300 and C → A ₹300; skip A's own share, then return the expense.</li>
+</ol>
+<p>If C isn't a member, reject the request at step 1. B's debt must remain unchanged too, which is why we validate every participant before updating anyone's balance.</p>
 <div class="codebox language-pair" data-code="code-3"><div class="codebar"><div aria-label="Group language" role="tablist"><button aria-controls="code-3-python" aria-selected="true" data-lang="python" id="code-3-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-3-java" aria-selected="false" data-lang="java" id="code-3-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-3-python-tab" id="code-3-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">add_expense</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">payer</span><span class="p">,</span> <span class="n">total</span><span class="p">,</span> <span class="n">participants</span><span class="p">):</span>
     <span class="n">require</span><span class="p">(</span><span class="n">payer</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">members</span><span class="p">)</span>
     <span class="n">require</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">total</span><span class="p">)</span> <span class="ow">is</span> <span class="nb">int</span> <span class="ow">and</span> <span class="n">total</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
@@ -307,6 +314,13 @@ Debt
 <p>All input validation happens before the first balance change. Don't validate participants as you update their debts: finding an unknown member halfway through would leave a partially applied expense. Duplicate participants are rejected rather than silently removed.</p>
 <p><strong>Record a settlement.</strong></p>
 <p>A settlement reduces an existing debt. It must not create a new obligation or flip its direction.</p>
+<p>Suppose B owes A ₹150 and pays back ₹100:</p>
+<ol>
+<li>Validate both members and a positive payment amount.</li>
+<li>Read B's debt to A and check that the payment does not exceed it.</li>
+<li>Store the remaining ₹50. If the payment clears the debt, remove the entry.</li>
+</ol>
+<p>A ₹200 payment fails at step 2, leaving the ₹150 debt untouched. A payment from A to B also fails because there is no debt in that direction.</p>
 <div class="codebox language-pair" data-code="code-4"><div class="codebar"><div aria-label="Group language" role="tablist"><button aria-controls="code-4-python" aria-selected="true" data-lang="python" id="code-4-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-4-java" aria-selected="false" data-lang="java" id="code-4-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-4-python-tab" id="code-4-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">record_settlement</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">debtor</span><span class="p">,</span> <span class="n">creditor</span><span class="p">,</span> <span class="n">amount</span><span class="p">):</span>
     <span class="n">require</span><span class="p">(</span><span class="n">debtor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">members</span> <span class="ow">and</span> <span class="n">creditor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">members</span><span class="p">)</span>
     <span class="n">require</span><span class="p">(</span><span class="n">debtor</span> <span class="o">!=</span> <span class="n">creditor</span><span class="p">)</span>

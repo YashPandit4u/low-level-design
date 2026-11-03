@@ -359,7 +359,14 @@ Those statements give us a concrete standard for deciding whether the code is co
 
 ## Implementation
 
-Start by getting one equal expense all the way through the system. Then add exact and percentage allocation, followed by settlement. That gives you a working flow before spending time on the trickiest rounding rule. Result records can be sketched; allocation and atomic debt updates deserve the implementation time.
+We don't need to spend equal time implementing every class. The important methods are the ones that calculate shares or change debts:
+
+- **SplitStrategy.allocate:** implement equal, exact, and percentage splits. Getting the total right, especially after rounding, is the interesting part.
+- **Group.addExpense:** validate the expense, calculate shares, and update balances and history together.
+- **Group.recordSettlement:** check the current debt before reducing it. A rejected payment must leave the group unchanged.
+- **SplitwiseService:** sketch the split-type lookup and delegation. Expense, Settlement, and Debt only need the immutable fields already defined; getters need snapshot behavior, not a full walkthrough.
+
+We'll show the service entry point, implement the allocation algorithms, then connect them to Group. Before coding the two Group mutations, we'll trace a successful operation and a rejection. Small helpers only need a brief explanation.
 
 For the walkthrough below, we'll group the three allocation algorithms together so you can compare them. Keep this example in mind:
 
@@ -626,15 +633,14 @@ Callers exclude self-debts before using this helper. Keeping the sign conversion
 
 We now know how to calculate shares. The next job is to accept all of an expense together. If Ben's debt changes but Chen's doesn't, we haven't recorded a smaller expense; we've recorded a broken one.
 
-The normal flow is:
+For a ₹900 expense paid by A for A, B, and C, starting with no debts:
 
-1. Validate the payer and total.
-2. Copy and validate the expense inputs, pass them to the strategy, and validate its result.
-3. Create an immutable Expense record.
-4. Under the group lock, calculate new balances for affected pairs.
-5. Commit those balances and append the record to history.
+1. Check the payer, total, and participant list; all three users must belong to the group.
+2. Pass the expense inputs to the equal-split strategy. It returns ₹300 each. Check that the returned users and total match the request.
+3. Create the Expense record. Under the group lock, prepare B → A ₹300 and C → A ₹300; A's own share creates no debt.
+4. Commit both balances and append the expense to history, then return it.
 
-Important failures include an unknown payer, a nonmember participant, an empty allocation, a negative share, and a total mismatch. None should alter the group.
+Now try an exact split of ₹900 with shares of ₹300, ₹300, and ₹200. The strategy rejects the ₹800 sum before any balance or history changes. A nonmember is rejected even earlier. If preparing a new balance overflows in Java, nothing is committed either. That's why validation and calculation come before writes.
 
 Python:
 
@@ -757,6 +763,14 @@ Per-pair locks are possible, but a multi-participant expense then needs multiple
 **Group.recordSettlement.**
 
 A settlement is not a negative expense. It has its own rule: there must already be enough debt in the requested direction.
+
+Suppose B owes A ₹150 and records a ₹100 payment:
+
+1. Check that B and A are distinct group members and the amount is positive.
+2. Under the group lock, read B's current debt to A and verify that ₹100 does not exceed it.
+3. Reduce the debt to ₹50 and append the settlement to history before releasing the lock.
+
+If B instead submits ₹200, reject it at step 2: the debt stays ₹150 and no settlement is recorded. A payment in the reverse direction is also rejected. The debt check and update share the lock so another settlement cannot change the amount between them.
 
 We convert the direction into `+1` or `-1`, then interpret the stored balance through it. If `(A, B)` stores `-15000`, B owes A ₹150. For B paying A, the direction is `-1`, so the outstanding amount is `(-1) × (-15000) = 15000`.
 
