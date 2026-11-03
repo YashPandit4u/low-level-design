@@ -206,7 +206,12 @@ Debt
 <h2 id="implementation">Implementation<a aria-label="Link to Implementation" class="heading-anchor" href="#implementation">#</a></h2>
 <p>We’ll focus on <strong>Group.addExpense</strong>, which creates debts, and <strong>Group.recordSettlement</strong>, which reduces existing debts. First, we’ll implement <code>splitEqually</code> and <code>addDebt</code>, the helpers these operations use.</p>
 <p>Expense and Debt only store the immutable fields already shown. We’ll briefly explain how to return balances without letting callers change the group’s data.</p>
-<p>Before coding each main operation, we'll walk through a success and a rejection. For the small helpers, a short explanation is enough.</p>
+<p>Before coding these two methods, we’ll separate the explanation into:</p>
+<ol>
+<li><strong>Core logic:</strong> the steps for completing a valid operation.</li>
+<li><strong>Edge cases:</strong> inputs to reject and boundary conditions to handle.</li>
+</ol>
+<p>Small helpers only need a brief explanation.</p>
 <p>The Python and Java snippets are pseudocode. <code>require</code> rejects invalid input. Result constructors copy the data they receive. Assume amounts fit the chosen integer representation for this first pass. Overflow and concurrent updates are covered in the follow-ups.</p>
 <h3 id="group_1">Group<a aria-label="Link to Group" class="heading-anchor" href="#group_1">#</a></h3>
 <p><strong>Split an expense equally.</strong></p>
@@ -272,13 +277,23 @@ Debt
 <p>For the example, <code>cancelled</code> is ₹100, leaving Ben owing Asha ₹200. If the new obligation is ₹400, cancellation uses up Ben's entire ₹300 debt, then records Asha owing Ben the remaining ₹100.</p>
 <p>This helper is private. Its callers supply distinct members and nonnegative amounts, and the map already satisfies the one-direction-per-pair rule. Keeping cancellation here means every expense follows the same rule.</p>
 <p><strong>Add the expense.</strong></p>
-<p>Suppose A pays ₹900 for A, B, and C, starting with no debts:</p>
+<p><strong>Core logic:</strong></p>
 <ol>
-<li>Validate the payer, positive total, and nonempty list of unique group members.</li>
-<li>Calculate ₹300 per participant and create the Expense result.</li>
-<li>Add B → A ₹300 and C → A ₹300. Skip A’s own share, then return the expense.</li>
+<li>Validate the payer, positive total, and participant list.</li>
+<li>Calculate each participant’s equal share and create the Expense result.</li>
+<li>Add each nonpayer’s share to their debt to the payer, cancelling any debt in the opposite direction.</li>
+<li>Return the expense.</li>
 </ol>
-<p>If C isn't a member, reject the request at step 1. B's debt must remain unchanged too, which is why we validate every participant before updating anyone's balance.</p>
+<p>If A pays ₹900 for A, B, and C, each share is ₹300. Starting with no debts, B and C now each owe A ₹300.</p>
+<p><strong>Edge cases:</strong></p>
+<ul>
+<li>Zero, negative, or non-integer total: reject.</li>
+<li>Payer or participant outside the group: reject.</li>
+<li>Empty participant list or duplicate participants: reject.</li>
+<li>Total does not divide evenly: distribute leftover paise using the equal-split helper.</li>
+<li>Payer included in the split: calculate their share but create no self-debt. Zero shares create no debts either.</li>
+</ul>
+<p>Validate every participant before changing balances. If C is not a member, reject the whole expense without changing B’s debt.</p>
 <div class="codebox language-pair" data-code="code-3"><div class="codebar"><div aria-label="Group language" role="tablist"><button aria-controls="code-3-python" aria-selected="true" data-lang="python" id="code-3-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-3-java" aria-selected="false" data-lang="java" id="code-3-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-3-python-tab" id="code-3-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">add_expense</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">payer</span><span class="p">,</span> <span class="n">total</span><span class="p">,</span> <span class="n">participants</span><span class="p">):</span>
     <span class="n">require</span><span class="p">(</span><span class="n">payer</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">members</span><span class="p">)</span>
     <span class="n">require</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">total</span><span class="p">)</span> <span class="ow">is</span> <span class="nb">int</span> <span class="ow">and</span> <span class="n">total</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
@@ -315,13 +330,23 @@ Debt
 <p>All input validation happens before the first balance change. Don't validate participants as you update their debts: finding an unknown member halfway through would leave a partially applied expense. Duplicate participants are rejected rather than silently removed.</p>
 <p><strong>Record a settlement.</strong></p>
 <p>A settlement reduces an existing debt. It must not create a new obligation or flip its direction.</p>
-<p>Suppose B owes A ₹150 and pays back ₹100:</p>
+<p><strong>Core logic:</strong></p>
 <ol>
-<li>Validate both members and a positive payment amount.</li>
-<li>Read B's debt to A and check that the payment does not exceed it.</li>
-<li>Store the remaining ₹50. If the payment clears the debt, remove the entry.</li>
+<li>Validate the two members and a positive payment amount.</li>
+<li>Look up the debt from the person paying to the person receiving payment.</li>
+<li>Check that the payment does not exceed that debt.</li>
+<li>Store the remaining amount, or remove the entry if the debt is cleared.</li>
 </ol>
-<p>A ₹200 payment fails at step 2, leaving the ₹150 debt untouched. A payment from A to B also fails because there is no debt in that direction.</p>
+<p>If B owes A ₹150 and pays ₹100, the remaining debt is ₹50.</p>
+<p><strong>Edge cases:</strong></p>
+<ul>
+<li>Zero, negative, or non-integer amount: reject.</li>
+<li>Unknown member or payment to oneself: reject.</li>
+<li>No debt in this direction, including a payment in the reverse direction: reject.</li>
+<li>Payment exceeds the debt: reject and leave the balance unchanged.</li>
+<li>Payment exactly equals the debt: remove the entry.</li>
+</ul>
+<p>A ₹200 payment against a ₹150 debt is rejected. B still owes A ₹150.</p>
 <div class="codebox language-pair" data-code="code-4"><div class="codebar"><div aria-label="Group language" role="tablist"><button aria-controls="code-4-python" aria-selected="true" data-lang="python" id="code-4-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-4-java" aria-selected="false" data-lang="java" id="code-4-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-4-python-tab" id="code-4-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">record_settlement</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">debtor</span><span class="p">,</span> <span class="n">creditor</span><span class="p">,</span> <span class="n">amount</span><span class="p">):</span>
     <span class="n">require</span><span class="p">(</span><span class="n">debtor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">members</span> <span class="ow">and</span> <span class="n">creditor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">members</span><span class="p">)</span>
     <span class="n">require</span><span class="p">(</span><span class="n">debtor</span> <span class="o">!=</span> <span class="n">creditor</span><span class="p">)</span>

@@ -370,7 +370,14 @@ We don't need to spend equal time implementing every class. The important method
 
 Expense, Settlement, and Debt only store the fields we already defined. We don’t need to implement them in detail here. We’ll also explain how balance and history reads return copies that callers cannot use to change group data.
 
-We'll show the service entry point, implement the allocation algorithms, then connect them to Group. Before coding the two Group mutations, we'll trace a successful operation and a rejection. Small helpers only need a brief explanation.
+We’ll show the service entry point, implement the allocation algorithms, then connect them to Group.
+
+Before coding these two methods, we’ll separate the explanation into:
+
+1. **Core logic:** the steps for completing a valid operation.
+2. **Edge cases:** inputs to reject and boundary conditions to handle.
+
+Small helpers only need a brief explanation.
 
 For the walkthrough below, we'll group the three allocation algorithms together so you can compare them. Keep this example in mind:
 
@@ -637,16 +644,28 @@ Callers exclude self-debts before using this helper. Keeping the sign conversion
 
 **Group.addExpense.**
 
-We now know how to calculate shares. Now we need to apply the whole expense. If we update Ben’s debt but fail before updating Chen’s, the balances will be wrong.
+We now know how to calculate shares. Next, we need to apply the whole expense without leaving some balances updated and others unchanged.
 
-For a ₹900 expense paid by A for A, B, and C, starting with no debts:
+**Core logic:**
 
-1. Check the payer, total, and participant list. All three users must belong to the group.
-2. Pass the expense inputs to the equal-split strategy. It returns ₹300 each. Check that the returned users and total match the request.
-3. Create the Expense record. Under the group lock, prepare B → A ₹300 and C → A ₹300. A’s own share creates no debt.
-4. Commit both balances and append the expense to history, then return it.
+1. Validate the positive total, payer, and participant list.
+2. Ask the strategy to calculate shares. Check that the returned participants and total match the expense.
+3. Create an immutable Expense record.
+4. Under the group lock, calculate the new balances for each participant who owes the payer. Skip the payer’s own share and any zero shares.
+5. Store all new balances, append the expense to history, and return it.
 
-Now try an exact split of ₹900 with shares of ₹300, ₹300, and ₹200. The strategy rejects the ₹800 sum before any balance or history changes. A nonmember is rejected even earlier. If preparing a new balance overflows in Java, nothing is committed either. That's why validation and calculation come before writes.
+For example, A paying ₹900 for A, B, and C creates B → A ₹300 and C → A ₹300. A’s own ₹300 share creates no debt.
+
+**Edge cases:**
+
+- Zero, negative, or non-integer total: reject.
+- Payer or participant outside the group, an empty participant list, or duplicate participants: reject.
+- Missing split values, mismatched counts, or invalid amounts or percentages: the strategy rejects them.
+- Strategy output with missing or extra users, negative shares, or a sum different from the total: reject.
+- Balance arithmetic exceeds Java’s `long` range: reject before storing any changes.
+- The payer is the only participant, or some shares are zero: record the expense without creating debts for those shares.
+
+Every rejection must leave balances and history unchanged. For example, shares of ₹300, ₹300, and ₹200 cannot cover a ₹900 expense. We reject that request before writing anything.
 
 Python:
 
@@ -772,13 +791,25 @@ We could use a lock for each pair of users. But one expense might then need seve
 
 A settlement is not a negative expense. It has its own rule: there must already be enough debt in the requested direction.
 
-Suppose B owes A ₹150 and records a ₹100 payment:
+**Core logic:**
 
-1. Check that B and A are distinct group members and the amount is positive.
-2. Under the group lock, read B's current debt to A and verify that ₹100 does not exceed it.
-3. Reduce the debt to ₹50 and append the settlement to history before releasing the lock.
+1. Validate that the amount is positive and the two users are distinct group members.
+2. Under the group lock, read the current debt in the requested payment direction.
+3. Check that the payment does not exceed the debt.
+4. Reduce the debt and append a settlement record. Remove the balance entry if the debt reaches zero.
 
-If B instead submits ₹200, reject it at step 2: the debt stays ₹150 and no settlement is recorded. A payment in the reverse direction is also rejected. The debt check and update share the lock so another settlement cannot change the amount between them.
+If B owes A ₹150 and pays ₹100, B now owes A ₹50. History gains one settlement record.
+
+**Edge cases:**
+
+- Zero, negative, or non-integer payment amount: reject.
+- Unknown member or payment to oneself: reject.
+- No debt in the requested direction, including a payment in the reverse direction: reject.
+- Payment greater than the outstanding debt: reject without changing balances or history.
+- Payment exactly equals the debt: remove the balance entry and keep the settlement in history.
+- Two settlements arrive together: check and reduce the debt under the same lock so both cannot spend the same outstanding amount.
+
+For example, a ₹200 payment against a ₹150 debt is rejected. The debt stays ₹150 and no settlement is recorded.
 
 We convert the direction into `+1` or `-1`, then interpret the stored balance through it. If `(A, B)` stores `-15000`, B owes A ₹150. For B paying A, the direction is `-1`, so the outstanding amount is `(-1) × (-15000) = 15000`.
 

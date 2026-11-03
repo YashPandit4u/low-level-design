@@ -157,7 +157,12 @@ We’ll focus on **Group.addExpense**, which creates debts, and **Group.recordSe
 
 Expense and Debt only store the immutable fields already shown. We’ll briefly explain how to return balances without letting callers change the group’s data.
 
-Before coding each main operation, we'll walk through a success and a rejection. For the small helpers, a short explanation is enough.
+Before coding these two methods, we’ll separate the explanation into:
+
+1. **Core logic:** the steps for completing a valid operation.
+2. **Edge cases:** inputs to reject and boundary conditions to handle.
+
+Small helpers only need a brief explanation.
 
 The Python and Java snippets are pseudocode. `require` rejects invalid input. Result constructors copy the data they receive. Assume amounts fit the chosen integer representation for this first pass. Overflow and concurrent updates are covered in the follow-ups.
 
@@ -247,13 +252,24 @@ This helper is private. Its callers supply distinct members and nonnegative amou
 
 **Add the expense.**
 
-Suppose A pays ₹900 for A, B, and C, starting with no debts:
+**Core logic:**
 
-1. Validate the payer, positive total, and nonempty list of unique group members.
-2. Calculate ₹300 per participant and create the Expense result.
-3. Add B → A ₹300 and C → A ₹300. Skip A’s own share, then return the expense.
+1. Validate the payer, positive total, and participant list.
+2. Calculate each participant’s equal share and create the Expense result.
+3. Add each nonpayer’s share to their debt to the payer, cancelling any debt in the opposite direction.
+4. Return the expense.
 
-If C isn't a member, reject the request at step 1. B's debt must remain unchanged too, which is why we validate every participant before updating anyone's balance.
+If A pays ₹900 for A, B, and C, each share is ₹300. Starting with no debts, B and C now each owe A ₹300.
+
+**Edge cases:**
+
+- Zero, negative, or non-integer total: reject.
+- Payer or participant outside the group: reject.
+- Empty participant list or duplicate participants: reject.
+- Total does not divide evenly: distribute leftover paise using the equal-split helper.
+- Payer included in the split: calculate their share but create no self-debt. Zero shares create no debts either.
+
+Validate every participant before changing balances. If C is not a member, reject the whole expense without changing B’s debt.
 
 Python:
 
@@ -301,13 +317,24 @@ All input validation happens before the first balance change. Don't validate par
 
 A settlement reduces an existing debt. It must not create a new obligation or flip its direction.
 
-Suppose B owes A ₹150 and pays back ₹100:
+**Core logic:**
 
-1. Validate both members and a positive payment amount.
-2. Read B's debt to A and check that the payment does not exceed it.
-3. Store the remaining ₹50. If the payment clears the debt, remove the entry.
+1. Validate the two members and a positive payment amount.
+2. Look up the debt from the person paying to the person receiving payment.
+3. Check that the payment does not exceed that debt.
+4. Store the remaining amount, or remove the entry if the debt is cleared.
 
-A ₹200 payment fails at step 2, leaving the ₹150 debt untouched. A payment from A to B also fails because there is no debt in that direction.
+If B owes A ₹150 and pays ₹100, the remaining debt is ₹50.
+
+**Edge cases:**
+
+- Zero, negative, or non-integer amount: reject.
+- Unknown member or payment to oneself: reject.
+- No debt in this direction, including a payment in the reverse direction: reject.
+- Payment exceeds the debt: reject and leave the balance unchanged.
+- Payment exactly equals the debt: remove the entry.
+
+A ₹200 payment against a ₹150 debt is rejected. B still owes A ₹150.
 
 Python:
 
