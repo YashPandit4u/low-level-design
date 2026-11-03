@@ -2,22 +2,22 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from threading import Barrier
-from splitwise import Debt, EqualSplit, ExactSplit, Expense, Group, PercentageSplit, SplitwiseService
+from splitwise import Debt, EqualSplitStrategy, ExactSplitStrategy, Expense, Group, PercentageSplitStrategy, SplitwiseService
 
 class SplitwiseTests(unittest.TestCase):
 
     def test_equal_rounding_and_input_order(self):
         expected = {'A': 3334, 'B': 3333, 'C': 3333}
-        self.assertEqual(EqualSplit().allocate(10000, ['C', 'A', 'B']), expected)
-        self.assertEqual(EqualSplit().allocate(10000, ['A', 'B', 'C']), expected)
-        self.assertEqual(EqualSplit().allocate(1, ['A', 'B', 'C']), {'A': 1, 'B': 0, 'C': 0})
+        self.assertEqual(EqualSplitStrategy().allocate(10000, ['C', 'A', 'B']), expected)
+        self.assertEqual(EqualSplitStrategy().allocate(10000, ['A', 'B', 'C']), expected)
+        self.assertEqual(EqualSplitStrategy().allocate(1, ['A', 'B', 'C']), {'A': 1, 'B': 0, 'C': 0})
 
     def test_percentage_rounding_and_conservation(self):
-        split = PercentageSplit()
+        split = PercentageSplitStrategy()
         self.assertEqual(split.allocate(101, ['A', 'B', 'C'], [3333, 3333, 3334]), {'A': 34, 'B': 33, 'C': 34})
         for total in range(1, 301):
             for a in (0, 1, 3333, 5000, 9999, 10000):
-                allocation = PercentageSplit().allocate(total, ['A', 'B', 'C'], [a, 10000 - a, 0])
+                allocation = PercentageSplitStrategy().allocate(total, ['A', 'B', 'C'], [a, 10000 - a, 0])
                 self.assertEqual(sum(allocation.values()), total)
                 self.assertEqual(allocation['C'], 0)
                 for (uid, weight) in (('A', a), ('B', 10000 - a)):
@@ -25,8 +25,8 @@ class SplitwiseTests(unittest.TestCase):
 
     def test_opposite_expenses_and_partial_settlement(self):
         group = Group(['A', 'B', 'C'])
-        group.add_expense('A', 90000, EqualSplit(), ['A', 'B', 'C'])
-        group.add_expense('B', 30000, EqualSplit(), ['A', 'B'])
+        group.add_expense('A', 90000, EqualSplitStrategy(), ['A', 'B', 'C'])
+        group.add_expense('B', 30000, EqualSplitStrategy(), ['A', 'B'])
         self.assertEqual(group.get_balances(), (Debt('B', 'A', 15000), Debt('C', 'A', 30000)))
         group.record_settlement('B', 'A', 10000)
         self.assertEqual(group.get_balances()[0], Debt('B', 'A', 5000))
@@ -36,23 +36,23 @@ class SplitwiseTests(unittest.TestCase):
 
     def test_payer_can_be_excluded_or_only_participant(self):
         group = Group(['A', 'B', 'C'])
-        group.add_expense('A', 20000, EqualSplit(), ['B', 'C'])
+        group.add_expense('A', 20000, EqualSplitStrategy(), ['B', 'C'])
         self.assertEqual(group.get_balances(), (Debt('B', 'A', 10000), Debt('C', 'A', 10000)))
-        group.add_expense('A', 500, EqualSplit(), ['A'])
+        group.add_expense('A', 500, EqualSplitStrategy(), ['A'])
         self.assertEqual(len(group.get_balances()), 2)
         self.assertEqual(len(group.get_history()), 2)
 
     def test_debt_direction_can_reverse(self):
         group = Group(['A', 'B'])
-        group.add_expense('A', 100, ExactSplit(), ['B'], [100])
-        group.add_expense('B', 150, ExactSplit(), ['A'], [150])
+        group.add_expense('A', 100, ExactSplitStrategy(), ['B'], [100])
+        group.add_expense('B', 150, ExactSplitStrategy(), ['A'], [150])
         self.assertEqual(group.get_balances(), (Debt('A', 'B', 50),))
 
     def test_invalid_operations_leave_balances_and_history_unchanged(self):
         group = Group(['A', 'B'])
-        group.add_expense('A', 100, ExactSplit(), ['B'], [100])
+        group.add_expense('A', 100, ExactSplitStrategy(), ['B'], [100])
         before = (group.get_balances(), group.get_history())
-        operations = [lambda : group.add_expense('X', 100, ExactSplit(), ['B'], [100]), lambda : group.add_expense('A', 100, ExactSplit(), ['X'], [100]), lambda : group.add_expense('A', 100, ExactSplit(), ['A', 'B'], [40, 50]), lambda : group.add_expense('A', 100, ExactSplit(), ['A', 'B'], [-1, 101]), lambda : group.add_expense('A', 100, PercentageSplit(), ['B'], [9999]), lambda : group.add_expense('A', 100, ExactSplit(), [], []), lambda : group.add_expense('A', 0, EqualSplit(), ['A']), lambda : group.add_expense('A', True, EqualSplit(), ['A']), lambda : group.record_settlement('B', 'A', 101), lambda : group.record_settlement('A', 'B', 1), lambda : group.record_settlement('A', 'A', 1), lambda : group.record_settlement('B', 'A', 0)]
+        operations = [lambda : group.add_expense('X', 100, ExactSplitStrategy(), ['B'], [100]), lambda : group.add_expense('A', 100, ExactSplitStrategy(), ['X'], [100]), lambda : group.add_expense('A', 100, ExactSplitStrategy(), ['A', 'B'], [40, 50]), lambda : group.add_expense('A', 100, ExactSplitStrategy(), ['A', 'B'], [-1, 101]), lambda : group.add_expense('A', 100, PercentageSplitStrategy(), ['B'], [9999]), lambda : group.add_expense('A', 100, ExactSplitStrategy(), [], []), lambda : group.add_expense('A', 0, EqualSplitStrategy(), ['A']), lambda : group.add_expense('A', True, EqualSplitStrategy(), ['A']), lambda : group.record_settlement('B', 'A', 101), lambda : group.record_settlement('A', 'B', 1), lambda : group.record_settlement('A', 'A', 1), lambda : group.record_settlement('B', 'A', 0)]
         for operation in operations:
             with self.assertRaises(ValueError):
                 operation()
@@ -72,11 +72,11 @@ class SplitwiseTests(unittest.TestCase):
     def test_duplicate_and_empty_participants(self):
         for users in ([], ['A', 'A'], ['']):
             with self.assertRaises(ValueError):
-                EqualSplit().allocate(100, users)
+                EqualSplitStrategy().allocate(100, users)
 
     def test_defensive_copies_and_immutable_results(self):
         (participants, amounts) = (['B'], [100])
-        strategy = ExactSplit()
+        strategy = ExactSplitStrategy()
         group = Group(['A', 'B'])
         expense = group.add_expense('A', 100, strategy, participants, amounts)
         participants.clear()
@@ -90,9 +90,9 @@ class SplitwiseTests(unittest.TestCase):
 
     def test_history_replay(self):
         group = Group(['A', 'B', 'C'])
-        group.add_expense('A', 101, PercentageSplit(), ['A', 'B', 'C'], [3333, 3333, 3334])
-        group.add_expense('B', 10000, EqualSplit(), ['C', 'B', 'A'])
-        group.add_expense('C', 100, ExactSplit(), ['A'], [100])
+        group.add_expense('A', 101, PercentageSplitStrategy(), ['A', 'B', 'C'], [3333, 3333, 3334])
+        group.add_expense('B', 10000, EqualSplitStrategy(), ['C', 'B', 'A'])
+        group.add_expense('C', 100, ExactSplitStrategy(), ['A'], [100])
         group.record_settlement('A', 'B', 1000)
         replay = {}
 
@@ -117,7 +117,7 @@ class SplitwiseTests(unittest.TestCase):
 
     def test_competing_settlements(self):
         group = Group(['A', 'B'])
-        group.add_expense('A', 10000, ExactSplit(), ['B'], [10000])
+        group.add_expense('A', 10000, ExactSplitStrategy(), ['B'], [10000])
         barrier = Barrier(2)
 
         def settle(_):
@@ -136,7 +136,7 @@ class SplitwiseTests(unittest.TestCase):
     def test_concurrent_expenses_do_not_lose_updates(self):
         group = Group(['A', 'B'])
         with ThreadPoolExecutor(max_workers=8) as pool:
-            list(pool.map(lambda _: group.add_expense('A', 1, ExactSplit(), ['B'], [1]), range(200)))
+            list(pool.map(lambda _: group.add_expense('A', 1, ExactSplitStrategy(), ['B'], [1]), range(200)))
         self.assertEqual(group.get_balances(), (Debt('B', 'A', 200),))
         self.assertEqual(len(group.get_history()), 200)
 
@@ -175,7 +175,7 @@ class SplitwiseTests(unittest.TestCase):
             service.get_balances('missing')
 class StrategyReuseTests(unittest.TestCase):
     def test_same_instances_with_different_inputs_and_concurrent_calls(self):
-        strategies = [EqualSplit(), ExactSplit(), PercentageSplit()]
+        strategies = [EqualSplitStrategy(), ExactSplitStrategy(), PercentageSplitStrategy()]
         def calculate(i):
             users = [f"A{i}", f"B{i}"]
             for strategy, values in zip(strategies, [None, [i, i], [5000, 5000]]):

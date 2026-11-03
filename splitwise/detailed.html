@@ -331,9 +331,9 @@ apply shares to balances
 <div class="codebox"><div class="codebar"><span class="code-title">SplitStrategy</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>interface SplitStrategy:
     allocate(total, participants, values) -&gt; Map&lt;UserId, amount&gt;
 
-EqualSplit()
-ExactSplit()
-PercentageSplit()
+EqualSplitStrategy()
+ExactSplitStrategy()
+PercentageSplitStrategy()
 </code></pre></div>
 <p>The strategies have no expense-specific fields. Each call receives the total, participants, and values. Exact values are amounts in paise; percentage values are basis points: <code>2500</code> means 25.00%, and <code>10000</code> means 100%. Values follow participant order; equal splits use no values.</p>
 <p>This lets the same strategy instance calculate different expenses. A strategy could also hold configuration without violating the pattern or single responsibility. Here, passing expense data into the method makes the separation easier to follow.</p>
@@ -369,9 +369,9 @@ Group
   getHistory() -&gt; List&lt;Event&gt;
 
 SplitStrategy.allocate(total, participants, values) -&gt; Map&lt;UserId, paise&gt;
-  EqualSplit()
-  ExactSplit()
-  PercentageSplit()
+  EqualSplitStrategy()
+  ExactSplitStrategy()
+  PercentageSplitStrategy()
 
 Event = Expense | Settlement
 Expense(id, payer, total, immutable sharesByUser)
@@ -393,7 +393,7 @@ Debt(debtor, creditor, positive amount)
 <p>For the walkthrough below, we'll group the three allocation algorithms together so you can compare them. Keep this example in mind:</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Implementation</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Asha pays ₹900 for Asha, Ben, and Chen
         ↓ splitType=EQUAL, participants=[A, B, C]
-Service selects its reusable EqualSplit instance
+Service selects its reusable EqualSplitStrategy instance
         ↓ Group calls allocate(90000, [A, B, C], no values)
 shares: Asha ₹300, Ben ₹300, Chen ₹300
         ↓ Group ignores the payer's own share
@@ -414,9 +414,9 @@ one history record, two current debts
 <p>Create one instance of each algorithm when the service is initialized. Each expense selects one by its split-type string:</p>
 <div class="codebox language-pair" data-code="code-2"><div class="codebar"><div aria-label="SplitwiseService language" role="tablist"><button aria-controls="code-2-python" aria-selected="true" data-lang="python" id="code-2-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-2-java" aria-selected="false" data-lang="java" id="code-2-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-2-python-tab" id="code-2-python" role="tabpanel" tabindex="0"><code><span class="c1"># In the service constructor:</span>
 <span class="bp">self</span><span class="o">.</span><span class="n">strategies</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">"EQUAL"</span><span class="p">:</span> <span class="n">EqualSplit</span><span class="p">(),</span>
-    <span class="s2">"EXACT"</span><span class="p">:</span> <span class="n">ExactSplit</span><span class="p">(),</span>
-    <span class="s2">"PERCENTAGE"</span><span class="p">:</span> <span class="n">PercentageSplit</span><span class="p">(),</span>
+    <span class="s2">"EQUAL"</span><span class="p">:</span> <span class="n">EqualSplitStrategy</span><span class="p">(),</span>
+    <span class="s2">"EXACT"</span><span class="p">:</span> <span class="n">ExactSplitStrategy</span><span class="p">(),</span>
+    <span class="s2">"PERCENTAGE"</span><span class="p">:</span> <span class="n">PercentageSplitStrategy</span><span class="p">(),</span>
 <span class="p">}</span>
 
 <span class="c1"># In add_expense, after looking up the group:</span>
@@ -424,9 +424,9 @@ one history record, two current debts
 <span class="n">strategy</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategies</span><span class="p">[</span><span class="n">split_type</span><span class="p">]</span>
 <span class="k">return</span> <span class="n">group</span><span class="o">.</span><span class="n">add_expense</span><span class="p">(</span><span class="n">payer</span><span class="p">,</span> <span class="n">total</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">participants</span><span class="p">,</span> <span class="n">values</span><span class="p">)</span>
 </code></pre><pre aria-labelledby="code-2-java-tab" hidden="" id="code-2-java" role="tabpanel" tabindex="0"><code><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">SplitStrategy</span><span class="o">&gt;</span><span class="w"> </span><span class="n">strategies</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span>
-<span class="w">    </span><span class="s">"EQUAL"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EqualSplit</span><span class="p">(),</span>
-<span class="w">    </span><span class="s">"EXACT"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ExactSplit</span><span class="p">(),</span>
-<span class="w">    </span><span class="s">"PERCENTAGE"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">PercentageSplit</span><span class="p">());</span>
+<span class="w">    </span><span class="s">"EQUAL"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EqualSplitStrategy</span><span class="p">(),</span>
+<span class="w">    </span><span class="s">"EXACT"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ExactSplitStrategy</span><span class="p">(),</span>
+<span class="w">    </span><span class="s">"PERCENTAGE"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">PercentageSplitStrategy</span><span class="p">());</span>
 
 <span class="c1">// In addExpense, after looking up the group:</span>
 <span class="n">require</span><span class="p">(</span><span class="n">splitType</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">strategies</span><span class="p">.</span><span class="na">containsKey</span><span class="p">(</span><span class="n">splitType</span><span class="p">));</span>
@@ -441,7 +441,7 @@ one history record, two current debts
 <h3 id="splitstrategy_1">SplitStrategy<a aria-label="Link to SplitStrategy" class="heading-anchor" href="#splitstrategy_1">#</a></h3>
 <p>All three strategies implement <code>allocate(total, participants, values)</code> and return each participant's share in paise. The snippets below show their method bodies.</p>
 <p>The shared <code>participant_ids</code> / <code>participantIds</code> helper copies and validates a nonempty list of unique user IDs. <code>split_values</code> / <code>splitValues</code> pairs those IDs with nonnegative integer values, rejecting missing values and length mismatches before building a map. These are small validation helpers, not new classes.</p>
-<p><strong>EqualSplit and the missing paise.</strong></p>
+<p><strong>EqualSplitStrategy and the missing paise.</strong></p>
 <p>The first version most people write is <code>total / numberOfPeople</code>. That works until the division has a remainder.</p>
 <p>For ₹100 among three people, the input is 10,000 paise:</p>
 <div class="codebox"><div class="codebar"><span class="code-title">SplitStrategy</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>base share = 10000 // 3 = 3333
@@ -475,7 +475,7 @@ Total: 10000
 
 
 <p>Do not silently turn a duplicated participant list into a set. If the input contains A twice, that could be a caller bug or an attempted weighting scheme. Our equal-split contract requires unique participants, so reject it.</p>
-<p><strong>ExactSplit.</strong></p>
+<p><strong>ExactSplitStrategy.</strong></p>
 <p>Exact splitting is validation, not an allocation algorithm. The caller already supplied the answer.</p>
 <div class="codebox language-pair" data-code="code-4"><div class="codebar"><div aria-label="SplitStrategy language" role="tablist"><button aria-controls="code-4-python" aria-selected="true" data-lang="python" id="code-4-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-4-java" aria-selected="false" data-lang="java" id="code-4-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-4-python-tab" id="code-4-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">total</span><span class="p">,</span> <span class="n">participants</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="n">require</span><span class="p">(</span><span class="n">total</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
@@ -500,7 +500,7 @@ Total: 10000
 
 <p>The Java version uses checked addition. An overflow must reject the operation instead of wrapping into a plausible-looking total. Python's integers can grow beyond a fixed machine word, but the API must still reject fractional amounts and booleans masquerading as integers.</p>
 <p>At the request boundary, reject duplicate user IDs before constructing a map. Once duplicates have overwritten each other in a map, the allocation layer can't recover the original input.</p>
-<p><strong>PercentageSplit and rounding fairly.</strong></p>
+<p><strong>PercentageSplitStrategy and rounding fairly.</strong></p>
 <p>For percentages, independently rounding each result is unsafe. Take 101 paise split 33.33%, 33.33%, and 33.34%. The exact shares are 33.6633, 33.6633, and 33.6734 paise. Rounding each to the nearest paise gives 34 + 34 + 34 = 102. We've charged the group an extra paise.</p>
 <p>We'll use the largest-remainder method. Compute every exact quota using integer arithmetic, allocate its floor, then give leftover paise to the largest fractional remainders. Break ties using user ID.</p>
 <p>For 101 paise split 33.33%, 33.33%, and 33.34%:</p>
@@ -844,7 +844,7 @@ Both record success.
     <span class="k">def</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">total</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">participants</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span> <span class="o">...</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">EqualSplit</span><span class="p">:</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">EqualSplitStrategy</span><span class="p">:</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">total</span><span class="p">,</span> <span class="n">participants</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
         <span class="n">integer</span><span class="p">(</span><span class="n">total</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
         <span class="n">users</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">participant_ids</span><span class="p">(</span><span class="n">participants</span><span class="p">))</span>
@@ -854,7 +854,7 @@ Both record success.
         <span class="k">return</span> <span class="p">{</span><span class="n">uid</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">&lt;</span> <span class="n">remainder</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">uid</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">users</span><span class="p">)}</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">ExactSplit</span><span class="p">:</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ExactSplitStrategy</span><span class="p">:</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">total</span><span class="p">,</span> <span class="n">participants</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
         <span class="n">integer</span><span class="p">(</span><span class="n">total</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
         <span class="n">amounts</span> <span class="o">=</span> <span class="n">split_values</span><span class="p">(</span><span class="n">participant_ids</span><span class="p">(</span><span class="n">participants</span><span class="p">),</span> <span class="n">values</span><span class="p">)</span>
@@ -863,7 +863,7 @@ Both record success.
         <span class="k">return</span> <span class="n">amounts</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">PercentageSplit</span><span class="p">:</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">PercentageSplitStrategy</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Integer basis points: 10000 means 100 percent."""</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">total</span><span class="p">,</span> <span class="n">participants</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
         <span class="n">integer</span><span class="p">(</span><span class="n">total</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
@@ -997,8 +997,8 @@ Both record success.
 
 <span class="k">class</span><span class="w"> </span><span class="nc">SplitwiseService</span><span class="p">:</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">group_members</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_strategies</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"EQUAL"</span><span class="p">:</span> <span class="n">EqualSplit</span><span class="p">(),</span> <span class="s2">"EXACT"</span><span class="p">:</span> <span class="n">ExactSplit</span><span class="p">(),</span>
-                            <span class="s2">"PERCENTAGE"</span><span class="p">:</span> <span class="n">PercentageSplit</span><span class="p">()}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_strategies</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"EQUAL"</span><span class="p">:</span> <span class="n">EqualSplitStrategy</span><span class="p">(),</span> <span class="s2">"EXACT"</span><span class="p">:</span> <span class="n">ExactSplitStrategy</span><span class="p">(),</span>
+                            <span class="s2">"PERCENTAGE"</span><span class="p">:</span> <span class="n">PercentageSplitStrategy</span><span class="p">()}</span>
         <span class="k">for</span> <span class="n">gid</span> <span class="ow">in</span> <span class="n">group_members</span><span class="p">:</span>
             <span class="n">user_id</span><span class="p">(</span><span class="n">gid</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_groups</span> <span class="o">=</span> <span class="p">{</span><span class="n">gid</span><span class="p">:</span> <span class="n">Group</span><span class="p">(</span><span class="n">members</span><span class="p">)</span> <span class="k">for</span> <span class="n">gid</span><span class="p">,</span> <span class="n">members</span> <span class="ow">in</span> <span class="n">group_members</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
@@ -1056,7 +1056,7 @@ Both record success.
 <span class="w">    </span><span class="kd">interface</span> <span class="nc">SplitStrategy</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="n">total</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">participants</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="n">values</span><span class="p">);</span>
 <span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kd">class</span> <span class="nc">EqualSplit</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">SplitStrategy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kd">class</span> <span class="nc">EqualSplitStrategy</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">SplitStrategy</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="n">total</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">participants</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="n">values</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="n">require</span><span class="p">(</span><span class="n">total</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="s">"Positive total required"</span><span class="p">);</span>
 <span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="n">sorted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">participantIds</span><span class="p">(</span><span class="n">participants</span><span class="p">));</span>
@@ -1069,7 +1069,7 @@ Both record success.
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ExactSplit</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">SplitStrategy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ExactSplitStrategy</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">SplitStrategy</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="n">total</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">participants</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="n">values</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="n">require</span><span class="p">(</span><span class="n">total</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="s">"Positive total required"</span><span class="p">);</span>
 <span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="n">amounts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">splitValues</span><span class="p">(</span><span class="n">participantIds</span><span class="p">(</span><span class="n">participants</span><span class="p">),</span><span class="w"> </span><span class="n">values</span><span class="p">);</span>
@@ -1079,7 +1079,7 @@ Both record success.
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">amounts</span><span class="p">;</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PercentageSplit</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">SplitStrategy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PercentageSplitStrategy</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">SplitStrategy</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="n">total</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">participants</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="n">values</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="n">require</span><span class="p">(</span><span class="n">total</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="s">"Positive total required"</span><span class="p">);</span>
 <span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="n">bps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">splitValues</span><span class="p">(</span><span class="n">participantIds</span><span class="p">(</span><span class="n">participants</span><span class="p">),</span><span class="w"> </span><span class="n">values</span><span class="p">);</span>
@@ -1206,7 +1206,7 @@ Both record success.
 <span class="w">        </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">SplitStrategy</span><span class="o">&gt;</span><span class="w"> </span><span class="n">strategies</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span>
-<span class="w">        </span><span class="s">"EQUAL"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EqualSplit</span><span class="p">(),</span><span class="w"> </span><span class="s">"EXACT"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ExactSplit</span><span class="p">(),</span><span class="w"> </span><span class="s">"PERCENTAGE"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">PercentageSplit</span><span class="p">());</span>
+<span class="w">        </span><span class="s">"EQUAL"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EqualSplitStrategy</span><span class="p">(),</span><span class="w"> </span><span class="s">"EXACT"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ExactSplitStrategy</span><span class="p">(),</span><span class="w"> </span><span class="s">"PERCENTAGE"</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">PercentageSplitStrategy</span><span class="p">());</span>
 <span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Group</span><span class="o">&gt;</span><span class="w"> </span><span class="n">groups</span><span class="p">;</span>
 <span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">Splitwise</span><span class="p">(</span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">groupMembers</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Group</span><span class="o">&gt;</span><span class="w"> </span><span class="n">built</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashMap</span><span class="o">&lt;&gt;</span><span class="p">();</span>
@@ -1296,9 +1296,9 @@ History: two expenses and one settlement.
 <p>For a separate expense where A pays ₹200 entirely for B and C, pass <code>EQUAL</code> with participants <code>[B, C]</code>. Both owe A ₹100. We do not force A into the participant set or invent an A share.</p>
 <h3 id="test-case-4-malformed-allocations-do-nothing">Test case 4: malformed allocations do nothing<a aria-label="Link to Test case 4: malformed allocations do nothing" class="heading-anchor" href="#test-case-4-malformed-allocations-do-nothing">#</a></h3>
 <p>Start with B owing A ₹50 and three existing history records. Try an exact ₹100 expense with A=₹40 and B=₹50:</p>
-<div class="codebox"><div class="codebar"><span class="code-title">Test case 4: malformed allocations do nothing</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Service validates the inputs, finds the group, and selects ExactSplit.
+<div class="codebox"><div class="codebar"><span class="code-title">Test case 4: malformed allocations do nothing</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Service validates the inputs, finds the group, and selects ExactSplitStrategy.
 Group validates payer A and total 10000.
-ExactSplit adds the supplied shares: 4000 + 5000 = 9000.
+ExactSplitStrategy adds the supplied shares: 4000 + 5000 = 9000.
 9000 != 10000 → reject.
 Group never reaches commit.
 
@@ -1327,7 +1327,7 @@ Result: exactly one new settlement, ₹20 still owed.
 <p>Replay each expense by adding every nonpayer share to the corresponding pair. Replay each settlement by subtracting its directed amount. Remove zero entries. Compare that reconstructed map with the live balance snapshot.</p>
 <p>This checks the relationship between history and balances across a sequence of operations. It is stronger than testing a single helper in isolation. Also verify that operations in one group do not change another group containing the same user IDs.</p>
 <h3 id="test-case-7-reuse-a-strategy-across-expenses">Test case 7: reuse a strategy across expenses<a aria-label="Link to Test case 7: reuse a strategy across expenses" class="heading-anchor" href="#test-case-7-reuse-a-strategy-across-expenses">#</a></h3>
-<p>Use the same EqualSplit instance for 100 paise among A and B, then 90 paise among B, C, and D. Expect 50 each in the first result and 30 each in the second. Repeat with exact and percentage inputs, including concurrent calls with different participant lists. Each result must depend only on that call's inputs. An invalid call must not affect the next valid one.</p>
+<p>Use the same EqualSplitStrategy instance for 100 paise among A and B, then 90 paise among B, C, and D. Expect 50 each in the first result and 30 each in the second. Repeat with exact and percentage inputs, including concurrent calls with different participant lists. Each result must depend only on that call's inputs. An invalid call must not affect the next valid one.</p>
 <h2 id="extensibility">Extensibility<a aria-label="Link to Extensibility" class="heading-anchor" href="#extensibility">#</a></h2>
 <p>The basic design is enough for a substantial interview. If there is time, these follow-ups test different kinds of reasoning: graph transformations, retry semantics, reversibility, and richer payment inputs.</p>
 <h3 id="how-would-you-simplify-debts-to-reduce-payments">How would you simplify debts to reduce payments?<a aria-label="Link to How would you simplify debts to reduce payments?" class="heading-anchor" href="#how-would-you-simplify-debts-to-reduce-payments">#</a></h3>

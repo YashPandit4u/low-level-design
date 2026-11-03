@@ -273,9 +273,9 @@ That gives us a small Strategy interface:
 interface SplitStrategy:
     allocate(total, participants, values) -> Map<UserId, amount>
 
-EqualSplit()
-ExactSplit()
-PercentageSplit()
+EqualSplitStrategy()
+ExactSplitStrategy()
+PercentageSplitStrategy()
 ```
 
 The strategies have no expense-specific fields. Each call receives the total, participants, and values. Exact values are amounts in paise; percentage values are basis points: `2500` means 25.00%, and `10000` means 100%. Values follow participant order; equal splits use no values.
@@ -325,9 +325,9 @@ Group
   getHistory() -> List<Event>
 
 SplitStrategy.allocate(total, participants, values) -> Map<UserId, paise>
-  EqualSplit()
-  ExactSplit()
-  PercentageSplit()
+  EqualSplitStrategy()
+  ExactSplitStrategy()
+  PercentageSplitStrategy()
 
 Event = Expense | Settlement
 Expense(id, payer, total, immutable sharesByUser)
@@ -355,7 +355,7 @@ For the walkthrough below, we'll group the three allocation algorithms together 
 ```text
 Asha pays ₹900 for Asha, Ben, and Chen
         ↓ splitType=EQUAL, participants=[A, B, C]
-Service selects its reusable EqualSplit instance
+Service selects its reusable EqualSplitStrategy instance
         ↓ Group calls allocate(90000, [A, B, C], no values)
 shares: Asha ₹300, Ben ₹300, Chen ₹300
         ↓ Group ignores the payer's own share
@@ -391,9 +391,9 @@ Python:
 ```python
 # In the service constructor:
 self.strategies = {
-    "EQUAL": EqualSplit(),
-    "EXACT": ExactSplit(),
-    "PERCENTAGE": PercentageSplit(),
+    "EQUAL": EqualSplitStrategy(),
+    "EXACT": ExactSplitStrategy(),
+    "PERCENTAGE": PercentageSplitStrategy(),
 }
 
 # In add_expense, after looking up the group:
@@ -406,9 +406,9 @@ Java:
 
 ```java
 private final Map<String, SplitStrategy> strategies = Map.of(
-    "EQUAL", new EqualSplit(),
-    "EXACT", new ExactSplit(),
-    "PERCENTAGE", new PercentageSplit());
+    "EQUAL", new EqualSplitStrategy(),
+    "EXACT", new ExactSplitStrategy(),
+    "PERCENTAGE", new PercentageSplitStrategy());
 
 // In addExpense, after looking up the group:
 require(splitType != null && strategies.containsKey(splitType));
@@ -426,7 +426,7 @@ All three strategies implement `allocate(total, participants, values)` and retur
 
 The shared `participant_ids` / `participantIds` helper copies and validates a nonempty list of unique user IDs. `split_values` / `splitValues` pairs those IDs with nonnegative integer values, rejecting missing values and length mismatches before building a map. These are small validation helpers, not new classes.
 
-**EqualSplit and the missing paise.**
+**EqualSplitStrategy and the missing paise.**
 
 The first version most people write is `total / numberOfPeople`. That works until the division has a remainder.
 
@@ -473,7 +473,7 @@ Map<String, Long> allocate(long total, List<String> participants, List<Long> val
 
 Do not silently turn a duplicated participant list into a set. If the input contains A twice, that could be a caller bug or an attempted weighting scheme. Our equal-split contract requires unique participants, so reject it.
 
-**ExactSplit.**
+**ExactSplitStrategy.**
 
 Exact splitting is validation, not an allocation algorithm. The caller already supplied the answer.
 
@@ -508,7 +508,7 @@ The Java version uses checked addition. An overflow must reject the operation in
 
 At the request boundary, reject duplicate user IDs before constructing a map. Once duplicates have overwritten each other in a map, the allocation layer can't recover the original input.
 
-**PercentageSplit and rounding fairly.**
+**PercentageSplitStrategy and rounding fairly.**
 
 For percentages, independently rounding each result is unsafe. Take 101 paise split 33.33%, 33.33%, and 33.34%. The exact shares are 33.6633, 33.6633, and 33.6734 paise. Rounding each to the nearest paise gives 34 + 34 + 34 = 102. We've charged the group an extra paise.
 
@@ -904,9 +904,9 @@ For a separate expense where A pays ₹200 entirely for B and C, pass `EQUAL` wi
 Start with B owing A ₹50 and three existing history records. Try an exact ₹100 expense with A=₹40 and B=₹50:
 
 ```text
-Service validates the inputs, finds the group, and selects ExactSplit.
+Service validates the inputs, finds the group, and selects ExactSplitStrategy.
 Group validates payer A and total 10000.
-ExactSplit adds the supplied shares: 4000 + 5000 = 9000.
+ExactSplitStrategy adds the supplied shares: 4000 + 5000 = 9000.
 9000 != 10000 → reject.
 Group never reaches commit.
 
@@ -948,7 +948,7 @@ This checks the relationship between history and balances across a sequence of o
 
 ### Test case 7: reuse a strategy across expenses
 
-Use the same EqualSplit instance for 100 paise among A and B, then 90 paise among B, C, and D. Expect 50 each in the first result and 30 each in the second. Repeat with exact and percentage inputs, including concurrent calls with different participant lists. Each result must depend only on that call's inputs. An invalid call must not affect the next valid one.
+Use the same EqualSplitStrategy instance for 100 paise among A and B, then 90 paise among B, C, and D. Expect 50 each in the first result and 30 each in the second. Repeat with exact and percentage inputs, including concurrent calls with different participant lists. Each result must depend only on that call's inputs. An invalid call must not affect the next valid one.
 
 ## Extensibility
 

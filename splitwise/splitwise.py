@@ -45,7 +45,7 @@ class SplitStrategy(Protocol):
     def allocate(self, total: int, participants, values=None) -> dict[str, int]: ...
 
 
-class EqualSplit:
+class EqualSplitStrategy:
     def allocate(self, total, participants, values=None):
         integer(total, 1)
         users = sorted(participant_ids(participants))
@@ -55,7 +55,7 @@ class EqualSplit:
         return {uid: base + (i < remainder) for i, uid in enumerate(users)}
 
 
-class ExactSplit:
+class ExactSplitStrategy:
     def allocate(self, total, participants, values=None):
         integer(total, 1)
         amounts = split_values(participant_ids(participants), values)
@@ -64,7 +64,7 @@ class ExactSplit:
         return amounts
 
 
-class PercentageSplit:
+class PercentageSplitStrategy:
     """Integer basis points: 10000 means 100 percent."""
     def allocate(self, total, participants, values=None):
         integer(total, 1)
@@ -198,8 +198,8 @@ class Group:
 
 class SplitwiseService:
     def __init__(self, group_members):
-        self._strategies = {"EQUAL": EqualSplit(), "EXACT": ExactSplit(),
-                            "PERCENTAGE": PercentageSplit()}
+        self._strategies = {"EQUAL": EqualSplitStrategy(), "EXACT": ExactSplitStrategy(),
+                            "PERCENTAGE": PercentageSplitStrategy()}
         for gid in group_members:
             user_id(gid)
         self._groups = {gid: Group(members) for gid, members in group_members.items()}

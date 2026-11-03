@@ -28,7 +28,7 @@ public final class Splitwise {
     interface SplitStrategy {
         Map<String, Long> allocate(long total, List<String> participants, List<Long> values);
     }
-    static final class EqualSplit implements SplitStrategy {
+    static final class EqualSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
             require(total > 0, "Positive total required");
             var sorted = new ArrayList<>(participantIds(participants));
@@ -41,7 +41,7 @@ public final class Splitwise {
             return result;
         }
     }
-    static final class ExactSplit implements SplitStrategy {
+    static final class ExactSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
             require(total > 0, "Positive total required");
             var amounts = splitValues(participantIds(participants), values);
@@ -51,7 +51,7 @@ public final class Splitwise {
             return amounts;
         }
     }
-    static final class PercentageSplit implements SplitStrategy {
+    static final class PercentageSplitStrategy implements SplitStrategy {
         public Map<String, Long> allocate(long total, List<String> participants, List<Long> values) {
             require(total > 0, "Positive total required");
             var bps = splitValues(participantIds(participants), values);
@@ -178,7 +178,7 @@ public final class Splitwise {
         }
     }
     private final Map<String, SplitStrategy> strategies = Map.of(
-        "EQUAL", new EqualSplit(), "EXACT", new ExactSplit(), "PERCENTAGE", new PercentageSplit());
+        "EQUAL", new EqualSplitStrategy(), "EXACT", new ExactSplitStrategy(), "PERCENTAGE", new PercentageSplitStrategy());
     private final Map<String, Group> groups;
     public Splitwise(Map<String, List<String>> groupMembers) {
         Map<String, Group> built = new HashMap<>();

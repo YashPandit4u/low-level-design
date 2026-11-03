@@ -380,9 +380,9 @@ An exact split supplies amounts directly. A percentage split supplies weights an
 
 ```text
 SplitStrategy.allocate(total, participants, values) -> Map<UserId, paise>
-    EqualSplit()
-    ExactSplit()
-    PercentageSplit()
+    EqualSplitStrategy()
+    ExactSplitStrategy()
+    PercentageSplitStrategy()
 
 Group.addExpense(payer, total, strategy, participants, values):
     shares = strategy.allocate(total, participants, values)
