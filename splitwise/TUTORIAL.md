@@ -380,11 +380,11 @@ We deliberately don't call `addDebt(creditor, debtor, amount)` here. That helper
 
 For `k` participants, adding an expense takes O(k log k) for sorting and O(k) expected time for map updates. A settlement takes O(1) expected time. Returning all `b` debts takes O(b), or O(b log b) if the display requires sorted results.
 
-## Verification
+### Verification
 
 A useful interview check follows the same group through several operations. Let A, B, and C represent Asha, Ben, and Chen.
 
-### Dinner, breakfast, and repayment
+#### Dinner, breakfast, and repayment
 
 ```text
 1. A pays ₹900 for A, B, C.
@@ -410,7 +410,7 @@ A useful interview check follows the same group through several operations. Let 
 
 This checks that expenses net together while settlements reduce only the debt that exists. Chen's balance stays untouched during Ben's repayments.
 
-### Boundaries worth checking
+#### Boundaries worth checking
 
 - **Rounding:** 10,000 paise among A, B, C yields 3334, 3333, 3333. Reordering the input gives the same shares.
 - **Payer excluded:** A pays ₹200 for B and C. Both owe A ₹100. A has no share in this expense.

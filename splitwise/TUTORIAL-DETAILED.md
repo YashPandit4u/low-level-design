@@ -900,13 +900,13 @@ javac --release 17 -d /tmp/splitwise-classes Splitwise.java SplitwiseTest.java
 java -cp /tmp/splitwise-classes SplitwiseTest
 ```
 
-## Verification
+### Verification
 
 Let’s check the balances and history after a sequence of operations. Use IDs A, B, and C for Asha, Ben, and Chen.
 
 Before tracing the ledger, call the service with each split type and verify the shares. Reject unknown types, duplicate participants, mismatched value counts, invalid totals, and nonmembers without changing balances or history. Changing the caller's lists after a call must not alter the stored expense.
 
-### Test case 1: equal expense followed by an opposite debt
+#### Test case 1: equal expense followed by an opposite debt
 
 The group starts empty. A pays ₹900 for A, B, and C.
 
@@ -940,7 +940,7 @@ History: two expenses
 
 Both expenses remain in history. Only their current net effect is reduced.
 
-### Test case 2: partial settlement and overpayment rejection
+#### Test case 2: partial settlement and overpayment rejection
 
 Continue from that state. B records a ₹100 payment to A:
 
@@ -957,7 +957,7 @@ History: two expenses and one settlement.
 
 If B next attempts ₹60, reject it. The balance stays at ₹50 and no history record is appended. If A tries paying B, reject that too: the debt points the other way. Paying exactly ₹50 removes the pair without deleting its history.
 
-### Test case 3: rounding and payer exclusion
+#### Test case 3: rounding and payer exclusion
 
 An equal 10,000-paise split among A, B, C produces 3334, 3333, 3333. Reordering the input participants produces the same allocation.
 
@@ -965,7 +965,7 @@ The percentage example produces 34, 33, 34 from 101 paise and weights 3333, 3333
 
 For a separate expense where A pays ₹200 entirely for B and C, pass `EQUAL` with participants `[B, C]`. Both owe A ₹100. We do not force A into the participant set or invent an A share.
 
-### Test case 4: malformed allocations do nothing
+#### Test case 4: malformed allocations do nothing
 
 Start with B owing A ₹50 and three existing history records. Try an exact ₹100 expense with A=₹40 and B=₹50:
 
@@ -985,7 +985,7 @@ Also reject a negative share, an empty split, and percentages summing to 99.99%.
 
 Compare both balances and history before and after each failure. Checking only for an exception is not enough. A method could change a balance and then throw.
 
-### Test case 5: competing settlements
+#### Test case 5: competing settlements
 
 Reset the group so B owes A ₹100. Two threads each attempt to record ₹80.
 
@@ -1006,13 +1006,13 @@ Result: exactly one new settlement, ₹20 still owed.
 
 Which thread wins is unspecified. The invariant holds either way.
 
-### Test case 6: reconstruct the balance index
+#### Test case 6: reconstruct the balance index
 
 Replay each expense by adding every nonpayer share to the corresponding pair. Replay each settlement by subtracting its directed amount. Remove zero entries. Compare that reconstructed map with the live balance snapshot.
 
 This checks the relationship between history and balances across a sequence of operations. It is stronger than testing a single helper in isolation. Also verify that operations in one group do not change another group containing the same user IDs.
 
-### Test case 7: reuse a strategy across expenses
+#### Test case 7: reuse a strategy across expenses
 
 Use the same EqualSplitStrategy instance for 100 paise among A and B, then 90 paise among B, C, and D. Expect 50 each in the first result and 30 each in the second. Repeat with exact and percentage inputs, including concurrent calls with different participant lists. Each result must depend only on that call's inputs. An invalid call must not affect the next valid one.
 
