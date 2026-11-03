@@ -42,16 +42,20 @@ def build(detailed=False):
     requirement_list = requirement_heading.find_next_sibling('ol')
     scope = requirement_list.find_next_sibling('p')
     assert scope.get_text().startswith('Out of scope')
+    scope_items = scope.find_next_sibling('ul')
+    assert scope_items is not None
+    scope_text = scope.get_text() + '\n' + '\n'.join('- ' + item.get_text() for item in scope_items.find_all('li', recursive=False))
     specification = 'Requirements:\n' + '\n'.join(
         f'{i}. {item.get_text()}'
         for i, item in enumerate(requirement_list.find_all('li', recursive=False), 1)
-    ) + '\n\n' + scope.get_text()
+    ) + '\n\n' + scope_text
     panel = frag('<div class="codebox requirements-panel"><div class="codebar">'
         '<span class="code-title">Final requirements</span>'
         '<button class="copy" aria-label="Copy requirements">▢</button></div>'
         + code_panel(specification, 'text') + '</div>')
     requirement_list.replace_with(panel)
     scope.decompose()
+    scope_items.decompose()
 
     # Combine adjacent language versions without removing any explanatory prose.
     count = 0
@@ -89,12 +93,16 @@ def build(detailed=False):
     # Keep comparisons available, but collapse secondary approaches on first load.
     for h in list(soup.find_all(['h4','h5'])):
         text = h.get_text()
-        if not text.startswith(('Option ', 'Incorrect:', 'Correct but broad:', 'Selected approach:')): continue
-        good = text.startswith(('Option 3','Selected approach:'))
-        bad = text.startswith(('Option 1','Incorrect:'))
-        detail = soup.new_tag('details', attrs={'class': 'comparison '+('good' if good else 'bad' if bad else 'neutral')})
-        if good: detail['open']=''
-        summary = soup.new_tag('summary'); summary.string = text
+        assessment = re.fullmatch(r'(.*?) \[(Bad fit|Incorrect|Good approach|Recommended)\]', text)
+        if not assessment: continue
+        title, label = assessment.groups()
+        tone = {'Bad fit': 'bad', 'Incorrect': 'bad', 'Good approach': 'neutral', 'Recommended': 'good'}[label]
+        detail = soup.new_tag('details', attrs={'class': 'comparison ' + tone})
+        if label == 'Recommended': detail['open'] = ''
+        summary = soup.new_tag('summary')
+        heading = soup.new_tag('span', attrs={'class': 'comparison-title'}); heading.string = title
+        badge = soup.new_tag('span', attrs={'class': 'approach-badge'}); badge.string = label
+        summary.append(heading); summary.append(badge)
         detail.append(summary)
         body = soup.new_tag('div',attrs={'class':'comparison-body'})
         nxt = h.find_next_sibling()

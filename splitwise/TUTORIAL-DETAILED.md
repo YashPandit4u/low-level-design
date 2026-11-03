@@ -6,7 +6,7 @@
 
 The interesting part starts when Ben pays for breakfast the next morning, someone chooses an unequal split, and two friends record settlements at the same time. We need the arithmetic and the state transitions to stay correct through all of that.
 
-We're designing a scoped, in-memory expense-sharing backend inspired by Splitwise. These are our interview requirements, not claims about Splitwise's internal implementation.
+We're designing a scoped, in-memory expense-sharing backend inspired by Splitwise.
 
 ## Requirements
 
@@ -72,9 +72,19 @@ Concurrency is part of correctness here. Two simultaneous settlements must not b
 8. Retain immutable expense and settlement records in group history.
 9. Reject invalid operations before changing state and support concurrent access.
 
-Out of scope: payment processing, currency conversion, account management, changing membership, expense edits/deletion, cross-group netting, persistence, notifications, and automatic debt simplification.
+Out of scope:
 
-We will use zero-valued individual shares when rounding or an explicit allocation produces them. The expense total and settlement amounts must still be positive. A one-paise expense split among three people cannot give everyone a positive share, so this is a necessary distinction.
+- Payment processing
+- Currency conversion
+- Account management
+- Changing membership
+- Expense edits/deletion
+- Cross-group netting
+- Persistence
+- Notifications
+- Automatic debt simplification
+
+A person's share can be zero: splitting 1 paise among three people gives 1, 0, and 0. Expenses and settlement payments must still be greater than zero.
 
 ## Core entities and relationships
 
@@ -147,7 +157,7 @@ Unknown groups produce a clear validation error. Everything else delegates to Gr
 
 A group needs its members, history, current balances, and a lock. Before writing those fields down, let's decide what a balance means.
 
-#### Option 1: store each person's net position
+#### Option 1: store each person's net position [Bad fit]
 
 Suppose we store:
 
@@ -169,7 +179,7 @@ Both have the same net positions: A owes ₹300, B is net zero, and C should rec
 
 This representation would be reasonable if the interviewer explicitly wanted only simplified net balances. It isn't enough for our current contract.
 
-#### Option 2: store both directions
+#### Option 2: store both directions [Good approach]
 
 We could store `balances[A][B] = 300` and `balances[B][A] = -300`. That makes lookup convenient, but every update must preserve the relationship between two entries.
 
@@ -177,7 +187,7 @@ This is a reasonable design if most queries ask for all debts involving one user
 
 Our API asks for the whole group's balances, so that lookup advantage doesn't help us yet. We can keep one copy instead.
 
-#### Option 3: store one signed balance per unordered pair
+#### Option 3: store one signed balance per unordered pair [Recommended]
 
 Sort the two immutable user IDs and use the ordered pair as a key. For key `(A, B)`:
 
@@ -623,7 +633,7 @@ No business validation belongs here: a rejection after the first write would lea
 
 #### Concurrency tradeoffs
 
-##### Incorrect: rely on a thread-safe map
+##### Rely on a thread-safe map [Incorrect]
 
 A concurrent map can protect individual operations. It doesn't make an entire expense atomic, and it doesn't combine a settlement's validation with its deduction.
 
@@ -636,11 +646,11 @@ Both record success.
 
 We have recorded ₹160 against a ₹100 debt. Depending on the update code, the balance may become negative or one deduction may overwrite the other. Neither result satisfies the contract.
 
-##### Correct but broad: one service-wide lock
+##### One service-wide lock [Good approach]
 
 This serializes every group. It is easy to implement, but adding dinner in one group blocks a completely unrelated group's settlement. There is no shared debt state between them, so that coordination is unnecessary.
 
-##### Selected approach: one lock per group
+##### One lock per group [Recommended]
 
 An expense may change several pairs and history together. A group lock covers that whole consistency boundary. Independent groups proceed concurrently, while related operations observe complete updates.
 

@@ -56,3 +56,7 @@ article{padding-right:0;overflow-wrap:break-word}
 #theme .theme-sun{display:none}.dark #theme .theme-moon{display:none}.dark #theme .theme-sun{display:block}
 @media(max-width:767px){.search-trigger{width:210px;max-width:calc(100vw - 100px);height:36px;gap:12px}#theme{width:36px;height:36px}.search-trigger kbd{display:none}}
 @media(prefers-reduced-motion:reduce){.search-trigger,#theme{transition:none}}
+
+.comparison-title{flex:1;min-width:0}.approach-badge{font-size:11px;line-height:18px;font-weight:600;padding:3px 9px;border-radius:5px;background:var(--paper);color:var(--body);white-space:nowrap;border:1px solid var(--border)}
+.comparison.bad .approach-badge{color:#aa3946}.comparison.good .approach-badge{color:#34735a}.dark .comparison.bad .approach-badge{color:#f1a5ae}.dark .comparison.good .approach-badge{color:#9ed5bc}
+@media(max-width:600px){.comparison>summary{flex-wrap:wrap;gap:8px}.comparison-title{flex-basis:calc(100% - 28px)}.approach-badge{order:3}.comparison>summary:after{margin-left:auto}}

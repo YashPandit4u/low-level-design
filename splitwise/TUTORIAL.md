@@ -57,7 +57,17 @@ These exclusions matter. The main implementation won't need event history, locks
 5. Return current debts with a debtor, creditor, and positive amount.
 6. Record partial or complete settlements; reject invalid operations before changing balances.
 
-Out of scope initially: user accounts, payment processing, unequal splits, history, editing, concurrency, persistence, currencies other than INR, and debt simplification through third parties.
+Out of scope initially:
+
+- User accounts
+- Payment processing
+- Unequal splits
+- History
+- Editing
+- Concurrency
+- Persistence
+- Currencies other than INR
+- Debt simplification through third parties
 
 ## Core entities and relationships
 
@@ -85,13 +95,13 @@ There's only one splitting rule so far. A private equal-split helper is enough; 
 
 Start with the questions the API needs to answer. If Ben wants to settle with Asha, we need to know how much **Ben owes Asha**, not just Ben's total debt across the group.
 
-#### Option 1: store only each person's net total
+#### Option 1: store only each person's net total [Bad fit]
 
 A map such as `Ben: -300, Asha: +300` looks convenient. But consider A owing B ₹300 while B owes C ₹300. B's net position is zero even though two direct debts still exist.
 
 Net totals are useful for simplifying payments, but they lose the relationships our settlement rule needs.
 
-#### Selected approach: store directed debts
+#### Option 2: store directed debts [Recommended]
 
 Use a map keyed by `(debtor, creditor)`, containing only positive amounts:
 

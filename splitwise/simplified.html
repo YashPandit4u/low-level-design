@@ -57,6 +57,10 @@ article{padding-right:0;overflow-wrap:break-word}
 #theme .theme-sun{display:none}.dark #theme .theme-moon{display:none}.dark #theme .theme-sun{display:block}
 @media(max-width:767px){.search-trigger{width:210px;max-width:calc(100vw - 100px);height:36px;gap:12px}#theme{width:36px;height:36px}.search-trigger kbd{display:none}}
 @media(prefers-reduced-motion:reduce){.search-trigger,#theme{transition:none}}
+
+.comparison-title{flex:1;min-width:0}.approach-badge{font-size:11px;line-height:18px;font-weight:600;padding:3px 9px;border-radius:5px;background:var(--paper);color:var(--body);white-space:nowrap;border:1px solid var(--border)}
+.comparison.bad .approach-badge{color:#aa3946}.comparison.good .approach-badge{color:#34735a}.dark .comparison.bad .approach-badge{color:#f1a5ae}.dark .comparison.good .approach-badge{color:#9ed5bc}
+@media(max-width:600px){.comparison>summary{flex-wrap:wrap;gap:8px}.comparison-title{flex-basis:calc(100% - 28px)}.approach-badge{order:3}.comparison>summary:after{margin-left:auto}}
 </style></head><body>
     <a class="skip" href="#article">Skip to article</a>
 
@@ -108,8 +112,18 @@ article{padding-right:0;overflow-wrap:break-word}
 5. Return current debts with a debtor, creditor, and positive amount.
 6. Record partial or complete settlements; reject invalid operations before changing balances.
 
-Out of scope initially: user accounts, payment processing, unequal splits, history, editing, concurrency, persistence, currencies other than INR, and debt simplification through third parties.
+Out of scope initially:
+- User accounts
+- Payment processing
+- Unequal splits
+- History
+- Editing
+- Concurrency
+- Persistence
+- Currencies other than INR
+- Debt simplification through third parties
 </code></pre></div>
+
 
 <h2 id="core-entities-and-relationships">Core Entities and Relationships<a aria-label="Link to Core Entities and Relationships" class="heading-anchor" href="#core-entities-and-relationships">#</a></h2>
 <p>The obvious nouns are users, groups, expenses, and balances. They don't all need classes with business logic.</p>
@@ -143,10 +157,10 @@ Out of scope initially: user accounts, payment processing, unequal splits, histo
 <h2 id="class-design">Class Design<a aria-label="Link to Class Design" class="heading-anchor" href="#class-design">#</a></h2>
 <h3 id="group-and-balance-representation">Group and balance representation<a aria-label="Link to Group and balance representation" class="heading-anchor" href="#group-and-balance-representation">#</a></h3>
 <p>Start with the questions the API needs to answer. If Ben wants to settle with Asha, we need to know how much <strong>Ben owes Asha</strong>, not just Ben's total debt across the group.</p>
-<details class="comparison bad"><summary>Option 1: store only each person's net total</summary><div class="comparison-body"><p>A map such as <code>Ben: -300, Asha: +300</code> looks convenient. But consider A owing B ₹300 while B owes C ₹300. B's net position is zero even though two direct debts still exist.</p><p>Net totals are useful for simplifying payments, but they lose the relationships our settlement rule needs.</p></div></details>
+<details class="comparison bad"><summary><span class="comparison-title">Option 1: store only each person's net total</span><span class="approach-badge">Bad fit</span></summary><div class="comparison-body"><p>A map such as <code>Ben: -300, Asha: +300</code> looks convenient. But consider A owing B ₹300 while B owes C ₹300. B's net position is zero even though two direct debts still exist.</p><p>Net totals are useful for simplifying payments, but they lose the relationships our settlement rule needs.</p></div></details>
 
 
-<details class="comparison good" open=""><summary>Selected approach: store directed debts</summary><div class="comparison-body"><p>Use a map keyed by <code>(debtor, creditor)</code>, containing only positive amounts:</p><div class="codebox"><div class="codebar"><span class="code-title">Selected approach: store directed debts</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>(Ben, Asha) → 30000    Ben owes Asha ₹300
+<details class="comparison good" open=""><summary><span class="comparison-title">Option 2: store directed debts</span><span class="approach-badge">Recommended</span></summary><div class="comparison-body"><p>Use a map keyed by <code>(debtor, creditor)</code>, containing only positive amounts:</p><div class="codebox"><div class="codebar"><span class="code-title">Option 2: store directed debts [Recommended]</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>(Ben, Asha) → 30000    Ben owes Asha ₹300
 (Chen, Asha) → 30000   Chen owes Asha ₹300
 </code></pre></div><p>For any two people, keep at most one direction. If Asha later owes Ben ₹100, reduce <code>(Ben, Asha)</code> to 20000. If she owes him ₹400 instead, remove the old entry and store <code>(Asha, Ben) → 10000</code>.</p><p>This takes a little cancellation logic, but the stored state reads just like the requirement. Zero means the entry disappears. We never store self-debts.</p><p>We could instead sort the IDs and encode direction using a positive or negative number. That's a valid alternative, but it introduces a sign convention that callers and helpers must interpret consistently. We'll keep direction explicit in this walkthrough.</p></div></details>
 

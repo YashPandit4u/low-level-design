@@ -57,6 +57,10 @@ article{padding-right:0;overflow-wrap:break-word}
 #theme .theme-sun{display:none}.dark #theme .theme-moon{display:none}.dark #theme .theme-sun{display:block}
 @media(max-width:767px){.search-trigger{width:210px;max-width:calc(100vw - 100px);height:36px;gap:12px}#theme{width:36px;height:36px}.search-trigger kbd{display:none}}
 @media(prefers-reduced-motion:reduce){.search-trigger,#theme{transition:none}}
+
+.comparison-title{flex:1;min-width:0}.approach-badge{font-size:11px;line-height:18px;font-weight:600;padding:3px 9px;border-radius:5px;background:var(--paper);color:var(--body);white-space:nowrap;border:1px solid var(--border)}
+.comparison.bad .approach-badge{color:#aa3946}.comparison.good .approach-badge{color:#34735a}.dark .comparison.bad .approach-badge{color:#f1a5ae}.dark .comparison.good .approach-badge{color:#9ed5bc}
+@media(max-width:600px){.comparison>summary{flex-wrap:wrap;gap:8px}.comparison-title{flex-basis:calc(100% - 28px)}.approach-badge{order:3}.comparison>summary:after{margin-left:auto}}
 </style></head><body>
     <a class="skip" href="#article">Skip to article</a>
 
@@ -66,7 +70,7 @@ article{padding-right:0;overflow-wrap:break-word}
 <h2 id="understanding-the-problem">Understanding the Problem<a aria-label="Link to Understanding the Problem" class="heading-anchor" href="#understanding-the-problem">#</a></h2>
 <p class="callout intro"><strong class="callout-title">💸 What is an expense-sharing system?</strong>An expense-sharing system records money people spend on behalf of a group and tracks who owes whom. If Asha pays ₹900 for dinner shared equally with Ben and Chen, Ben owes Asha ₹300 and Chen owes Asha ₹300. Asha's own ₹300 share creates no debt.</p>
 <p>The interesting part starts when Ben pays for breakfast the next morning, someone chooses an unequal split, and two friends record settlements at the same time. We need the arithmetic and the state transitions to stay correct through all of that.</p>
-<p>We're designing a scoped, in-memory expense-sharing backend inspired by Splitwise. These are our interview requirements, not claims about Splitwise's internal implementation.</p>
+<p>We're designing a scoped, in-memory expense-sharing backend inspired by Splitwise.</p>
 <h2 id="requirements">Requirements<a aria-label="Link to Requirements" class="heading-anchor" href="#requirements">#</a></h2>
 <p>Imagine the interviewer opens with:</p>
 <blockquote>
@@ -121,10 +125,20 @@ article{padding-right:0;overflow-wrap:break-word}
 8. Retain immutable expense and settlement records in group history.
 9. Reject invalid operations before changing state and support concurrent access.
 
-Out of scope: payment processing, currency conversion, account management, changing membership, expense edits/deletion, cross-group netting, persistence, notifications, and automatic debt simplification.
+Out of scope:
+- Payment processing
+- Currency conversion
+- Account management
+- Changing membership
+- Expense edits/deletion
+- Cross-group netting
+- Persistence
+- Notifications
+- Automatic debt simplification
 </code></pre></div>
 
-<p>We will use zero-valued individual shares when rounding or an explicit allocation produces them. The expense total and settlement amounts must still be positive. A one-paise expense split among three people cannot give everyone a positive share, so this is a necessary distinction.</p>
+
+<p>A person's share can be zero: splitting 1 paise among three people gives 1, 0, and 0. Expenses and settlement payments must still be greater than zero.</p>
 <h2 id="core-entities-and-relationships">Core Entities and Relationships<a aria-label="Link to Core Entities and Relationships" class="heading-anchor" href="#core-entities-and-relationships">#</a></h2>
 <p>Let's consider the nouns before turning them into classes.</p>
 <p><strong>User.</strong> The identity system is external, and this subsystem only needs membership and IDs. There is no need for a User class containing email addresses, passwords, or payment details. User IDs stay strings.</p>
@@ -219,9 +233,9 @@ addExpense receives a SplitStrategy
 <p>Unknown groups produce a clear validation error. Everything else delegates to Group. A service method that merely performs a lookup is fine; we don't need to give it extra responsibilities to make it look important.</p>
 <h3 id="group-and-balance-representation">Group and balance representation<a aria-label="Link to Group and balance representation" class="heading-anchor" href="#group-and-balance-representation">#</a></h3>
 <p>A group needs its members, history, current balances, and a lock. Before writing those fields down, let's decide what a balance means.</p>
-<details class="comparison bad"><summary>Option 1: store each person's net position</summary><div class="comparison-body"><p>Suppose we store:</p><div class="codebox"><div class="codebar"><span class="code-title">Option 1: store each person's net position</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Asha: +₹300
+<details class="comparison bad"><summary><span class="comparison-title">Option 1: store each person's net position</span><span class="approach-badge">Bad fit</span></summary><div class="comparison-body"><p>Suppose we store:</p><div class="codebox"><div class="codebar"><span class="code-title">Option 1: store each person's net position [Bad fit]</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Asha: +₹300
 Ben:  -₹300
-</code></pre></div><p>Positive means the person should receive money; negative means they owe money. This is compact and useful for debt simplification.</p><p>But it loses who owes whom. Consider two histories:</p><div class="codebox"><div class="codebar"><span class="code-title">Option 1: store each person's net position</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>History 1: A owes B ₹300; B owes C ₹300
+</code></pre></div><p>Positive means the person should receive money; negative means they owe money. This is compact and useful for debt simplification.</p><p>But it loses who owes whom. Consider two histories:</p><div class="codebox"><div class="codebar"><span class="code-title">Option 1: store each person's net position [Bad fit]</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>History 1: A owes B ₹300; B owes C ₹300
 History 2: A owes C ₹300
 </code></pre></div><p>Both have the same net positions: A owes ₹300, B is net zero, and C should receive ₹300. Our requirements distinguish those histories because we preserve direct pair relationships. Net positions alone cannot answer which settlement is valid.</p><p>This representation would be reasonable if the interviewer explicitly wanted only simplified net balances. It isn't enough for our current contract.</p></div></details>
 
@@ -231,11 +245,11 @@ History 2: A owes C ₹300
 
 
 
-<details class="comparison neutral"><summary>Option 2: store both directions</summary><div class="comparison-body"><p>We could store <code>balances[A][B] = 300</code> and <code>balances[B][A] = -300</code>. That makes lookup convenient, but every update must preserve the relationship between two entries.</p><p>This is a reasonable design if most queries ask for all debts involving one user: their row already contains the answer. With one group lock, we can update both entries safely. The cost is maintaining two copies of every relationship, including deleting both when a debt reaches zero.</p><p>Our API asks for the whole group's balances, so that lookup advantage doesn't help us yet. We can keep one copy instead.</p></div></details>
+<details class="comparison neutral"><summary><span class="comparison-title">Option 2: store both directions</span><span class="approach-badge">Good approach</span></summary><div class="comparison-body"><p>We could store <code>balances[A][B] = 300</code> and <code>balances[B][A] = -300</code>. That makes lookup convenient, but every update must preserve the relationship between two entries.</p><p>This is a reasonable design if most queries ask for all debts involving one user: their row already contains the answer. With one group lock, we can update both entries safely. The cost is maintaining two copies of every relationship, including deleting both when a debt reaches zero.</p><p>Our API asks for the whole group's balances, so that lookup advantage doesn't help us yet. We can keep one copy instead.</p></div></details>
 
 
 
-<details class="comparison good" open=""><summary>Option 3: store one signed balance per unordered pair</summary><div class="comparison-body"><p>Sort the two immutable user IDs and use the ordered pair as a key. For key <code>(A, B)</code>:</p><div class="codebox"><div class="codebar"><span class="code-title">Option 3: store one signed balance per unordered pair</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code> +30000 means A owes B ₹300
+<details class="comparison good" open=""><summary><span class="comparison-title">Option 3: store one signed balance per unordered pair</span><span class="approach-badge">Recommended</span></summary><div class="comparison-body"><p>Sort the two immutable user IDs and use the ordered pair as a key. For key <code>(A, B)</code>:</p><div class="codebox"><div class="codebar"><span class="code-title">Option 3: store one signed balance per unordered pair [Recommended]</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code> +30000 means A owes B ₹300
  -30000 means B owes A ₹300
        0 means neither owes the other; remove the entry
 </code></pre></div><p>The ordering uses IDs, not display names. Renaming “Asha” must not change the direction of an existing balance. Assume normalized ASCII IDs so Python and Java use the same ordering.</p><p>Now opposite obligations become ordinary addition. If A owes B ₹300 and a later expense makes B owe A ₹100, the same entry changes from <code>30000</code> to <code>20000</code>.</p><p>We'll use this representation. It gives us one value to update for either direction of a debt. The tradeoff is less obvious arithmetic: a negative number is easy to misread, so we'll centralize the sign conversion in one helper. Finding all debts for one person also requires scanning the pair map unless we add an index later.</p><p>The sign convention is internal. Callers receive <code>Debt(debtor, creditor, positiveAmount)</code> so UI code doesn't have to understand it.</p></div></details>
@@ -591,7 +605,7 @@ Total: 10000
 
 <p>No business validation belongs here: a rejection after the first write would leave a partial update. Readers take the same lock, so they cannot observe the interval between updating the pairs and appending history. This is atomic visibility within our process, not crash recovery. Durable all-or-nothing writes need a database transaction, which we'll discuss in the follow-ups.</p>
 <h4 id="concurrency-tradeoffs">Concurrency tradeoffs</h4>
-<details class="comparison bad"><summary>Incorrect: rely on a thread-safe map</summary><div class="comparison-body"><p>A concurrent map can protect individual operations. It doesn't make an entire expense atomic, and it doesn't combine a settlement's validation with its deduction.</p><div class="codebox"><div class="codebar"><span class="code-title">Concurrency tradeoffs</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Ben owes Asha ₹100.
+<details class="comparison bad"><summary><span class="comparison-title">Rely on a thread-safe map</span><span class="approach-badge">Incorrect</span></summary><div class="comparison-body"><p>A concurrent map can protect individual operations. It doesn't make an entire expense atomic, and it doesn't combine a settlement's validation with its deduction.</p><div class="codebox"><div class="codebar"><span class="code-title">Concurrency tradeoffs</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Ben owes Asha ₹100.
 Thread 1 checks: ₹100 outstanding, payment of ₹80 is valid.
 Thread 2 checks: ₹100 outstanding, payment of ₹80 is valid.
 Both record success.
@@ -599,9 +613,9 @@ Both record success.
 
 
 
-<details class="comparison neutral"><summary>Correct but broad: one service-wide lock</summary><div class="comparison-body"><p>This serializes every group. It is easy to implement, but adding dinner in one group blocks a completely unrelated group's settlement. There is no shared debt state between them, so that coordination is unnecessary.</p></div></details>
+<details class="comparison neutral"><summary><span class="comparison-title">One service-wide lock</span><span class="approach-badge">Good approach</span></summary><div class="comparison-body"><p>This serializes every group. It is easy to implement, but adding dinner in one group blocks a completely unrelated group's settlement. There is no shared debt state between them, so that coordination is unnecessary.</p></div></details>
 
-<details class="comparison good" open=""><summary>Selected approach: one lock per group</summary><div class="comparison-body"><p>An expense may change several pairs and history together. A group lock covers that whole consistency boundary. Independent groups proceed concurrently, while related operations observe complete updates.</p><p>Per-pair locks are possible, but a multi-participant expense then needs multiple locks in a stable order, history needs coordinated updates, and readers need consistent snapshots. That's a substantial complexity increase. Start with a group lock; consider finer granularity only when a measured workload justifies it.</p></div></details>
+<details class="comparison good" open=""><summary><span class="comparison-title">One lock per group</span><span class="approach-badge">Recommended</span></summary><div class="comparison-body"><p>An expense may change several pairs and history together. A group lock covers that whole consistency boundary. Independent groups proceed concurrently, while related operations observe complete updates.</p><p>Per-pair locks are possible, but a multi-participant expense then needs multiple locks in a stable order, history needs coordinated updates, and readers need consistent snapshots. That's a substantial complexity increase. Start with a group lock; consider finer granularity only when a measured workload justifies it.</p></div></details>
 
 
 <h4 id="grouprecordsettlement">Group.recordSettlement</h4>
