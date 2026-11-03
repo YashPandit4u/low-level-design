@@ -80,6 +80,7 @@ article{padding-right:0;overflow-wrap:break-word}
 <p class="callout intro"><strong class="callout-title">🏧 What is an ATM?</strong>An ATM lets a customer use a bank account without visiting a teller. The customer inserts a card, enters a PIN, and asks for cash. Our job is to coordinate that session, the bank, and the cash dispenser without losing track of the money.</p>
 <p>The screen makes this look simple. The difficult moment comes after the bank approves a withdrawal. What if the machine cannot dispense the notes? What if it dispenses them but the reply is lost? We'll build the normal flow first, then make those outcomes explicit.</p>
 <h2 id="requirements">Requirements<a aria-label="Link to Requirements" class="heading-anchor" href="#requirements">#</a></h2>
+<p>Start with a small prompt: “Design an ATM that authenticates a customer and lets them check their balance or withdraw cash.” Before choosing classes, establish who owns the account and what happens when cash delivery fails.</p>
 <h3 id="clarifying-questions">Clarifying Questions<a aria-label="Link to Clarifying Questions" class="heading-anchor" href="#clarifying-questions">#</a></h3>
 <blockquote class="dialogue">
 <p><strong>You:</strong> Which operations should we support? Do we need deposits and transfers?</p>
@@ -90,6 +91,8 @@ article{padding-right:0;overflow-wrap:break-word}
 <p><strong>Interviewer:</strong> Yes. A successful hold reduces the available balance. We can capture it after delivery or release it when no cash was delivered.</p>
 <p><strong>You:</strong> Which notes are available, and what should happen after a wrong PIN?</p>
 <p><strong>Interviewer:</strong> Note denominations and counts are configured at startup. Reject a withdrawal if no exact bundle is available. Allow three rejected PIN attempts per inserted-card session, then eject the card.</p>
+<p><strong>You:</strong> Are we designing one machine or a fleet? Can requests overlap?</p>
+<p><strong>Interviewer:</strong> One ATM with one active card session. Calls may arrive from different threads, so serialize them. The bank handles account activity from other machines.</p>
 <p><strong>You:</strong> Are we handling real hardware and process crashes?</p>
 <p><strong>Interviewer:</strong> Model the hardware behind an interface. Handle definite and uncertain dispensing results. Keep persistent crash recovery and operator reconciliation as follow-ups.</p>
 </blockquote>
@@ -118,7 +121,9 @@ Out of scope:
 
 <p>We model successful card ejection as a hardware call. If that call fails, the ATM stops serving customers. We do not pretend a software state change can physically remove a stuck card.</p>
 <h2 id="core-entities-and-relationships">Core Entities and Relationships<a aria-label="Link to Core Entities and Relationships" class="heading-anchor" href="#core-entities-and-relationships">#</a></h2>
-<p>Start with the nouns in the requirements: ATM, card, account, bank, notes, and dispenser. Not every noun needs a class.</p>
+<p>Start with the nouns in the requirements: ATM, session, card, account, bank, notes, and dispenser. Keep a class when it owns changing state, enforces a rule, or represents an external dependency.</p>
+<p>The <strong>ATM</strong> needs to remember the active card and allowed operations. <strong>CashInventory</strong> needs to track note counts and find valid bundles. <strong>BankGateway</strong> and <strong>Hardware</strong> define the operations we need from systems outside that local state.</p>
+<p>A session is just a few fields on this one ATM. It does not need its own class yet. We would reconsider that if sessions had a separate lifecycle or were stored independently.</p>
 <table>
 <thead>
 <tr>
@@ -146,31 +151,100 @@ Out of scope:
 </tbody>
 </table>
 <p>A card ID and an account ID are strings. We do not need a Customer or Account class because their data belongs to the bank. A map from denomination to count represents the cash stock. There is no useful behavior to put on an individual Banknote object here.</p>
-<p>The ATM creates its own CashInventory. The bank and hardware implementations are supplied at startup. A customer-facing call is just <code>withdraw(amount)</code>, not a request to construct one of these internal objects.</p>
+<p>The ATM creates and owns one CashInventory. Startup code supplies the bank adapter and a hardware adapter for this machine. The screen controller calls ATM with a card ID, PIN, or amount. It never calls the bank or changes inventory directly.</p>
+<p>For example, the controller calls <code>insertCard("card-A")</code>, then <code>enterPin("1234")</code>. Only after a successful PIN check can it call <code>withdraw(60000)</code> for ₹600. It does not supply an account ID for withdrawal. ATM uses the account returned by the bank for this session.</p>
 <h2 id="class-design">Class Design<a aria-label="Link to Class Design" class="heading-anchor" href="#class-design">#</a></h2>
+<p>We will start with the entry point, ATM, then define its dependencies. In these sketches, <code>-</code> marks private state or a private helper. <code>+</code> marks an operation available to the class’s caller. CashInventory’s caller is ATM, not the screen controller.</p>
 <h3 id="atm">ATM<a aria-label="Link to ATM" class="heading-anchor" href="#atm">#</a></h3>
-<p>The ATM owns the session. Keeping that state in one place prevents a successful PIN check from accidentally authorizing a later customer's card.</p>
+<p>The ATM owns the session. Let's connect the requirements to the state it needs:</p>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>State ATM needs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Accept one card and require authentication</td>
+<td>Card ID, account ID, and current state</td>
+</tr>
+<tr>
+<td>End the session after three rejected PINs</td>
+<td>Attempt count</td>
+</tr>
+<tr>
+<td>Respect the withdrawal limit and available notes</td>
+<td>Limit and owned CashInventory</td>
+</tr>
+<tr>
+<td>Stop after an uncertain withdrawal</td>
+<td>Pending operation ID and OUT_OF_SERVICE state</td>
+</tr>
+<tr>
+<td>Serialize requests on this machine</td>
+<td>One lock shared by its operations</td>
+</tr>
+</tbody>
+</table>
+<p>The card ID identifies what was inserted. The account ID comes from successful authentication and is cleared when the session ends. Keeping both private prevents the caller from choosing a different account for a withdrawal.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>ATM
-  bank: BankGateway
-  hardware: Hardware
-  cash: CashInventory
-  withdrawalLimit: long              // paise
-  state: string                      // IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
-  card: string | null
-  account: string | null
-  attempts: int
-  pending: string | null             // unresolved withdrawal operation ID
+  - bank: BankGateway
+  - hardware: Hardware
+  - cash: CashInventory
+  - withdrawalLimit: long              // paise
+  - state: string                      // IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
+  - card: string | null
+  - account: string | null
+  - attempts: int
+  - pending: string | null             // unresolved withdrawal operation ID
+  - lock: Lock                         // Java uses this object's monitor
 
-  insertCard(cardId: string) -&gt; void
-  enterPin(pin: string) -&gt; boolean
-  balance() -&gt; long
-  withdraw(amount: long) -&gt; string
-  cancel() -&gt; void
-  state() -&gt; string
-  pendingOperation() -&gt; string | null
-  cashSnapshot() -&gt; Map&lt;long, int&gt;
+  + ATM(bank: BankGateway, hardware: Hardware,
+        notes: Map&lt;long, int&gt;, withdrawalLimit: long)
+  + insertCard(cardId: string) -&gt; void
+  + enterPin(pin: string) -&gt; boolean
+  + balance() -&gt; long                   // available balance in paise
+  + withdraw(amount: long) -&gt; string    // amount in paise
+  + cancel() -&gt; void
+  + state() -&gt; string
+  + pendingOperation() -&gt; string | null
+  + cashSnapshot() -&gt; Map&lt;long, int&gt;
+  - endSession(outOfService: boolean) -&gt; void
 </code></pre></div>
 <p>Python uses <code>int</code> for money. Java uses <code>long</code> and <code>Map&lt;Long, Integer&gt;</code> for note counts. Python's <code>status()</code> returns the state and pending ID together. These inspection methods are for tests and maintenance, not account operations.</p>
+<p><code>enterPin</code> returns true when authentication succeeds and false when the bank rejects the card or PIN. Invalid input or an operation in the wrong state raises an error. <code>withdraw</code> returns a short result string for an attempted withdrawal:</p>
+<table>
+<thead>
+<tr>
+<th>Result</th>
+<th>Meaning for the caller</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SUCCESS</td>
+<td>The full bundle was delivered and the bank confirmed the debit.</td>
+</tr>
+<tr>
+<td>CASH_UNAVAILABLE</td>
+<td>No exact bundle is available. The bank was not asked to reserve funds.</td>
+</tr>
+<tr>
+<td>DECLINED</td>
+<td>The bank rejected the hold. No dispensing was attempted.</td>
+</tr>
+<tr>
+<td>NOT_DISPENSED</td>
+<td>No cash was delivered and the bank confirmed release of the hold.</td>
+</tr>
+<tr>
+<td>PENDING_REVIEW</td>
+<td>The outcome needs review. Do not treat it as success or retry as a new withdrawal.</td>
+</tr>
+</tbody>
+</table>
+<p><code>cancel</code> ends the session and attempts ejection. It does not promise that a stuck card was physically returned. The controller can read the state to see whether the ATM was taken out of service.</p>
 <table>
 <thead>
 <tr>
@@ -227,28 +301,30 @@ Out of scope:
 <p>Use strings for this walkthrough. The transitions are the important part, not an enum or a hierarchy. Public methods change the state, callers cannot set it directly.</p>
 <h3 id="bankgateway">BankGateway<a aria-label="Link to BankGateway" class="heading-anchor" href="#bankgateway">#</a></h3>
 <p>The bank owns money. In particular, a balance check followed by an unrelated debit is not enough: another ATM could spend the same funds between those calls.</p>
-<div class="codebox"><div class="codebar"><span class="code-title">BankGateway</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>BankGateway
-  authenticate(cardId: string, pin: string) -&gt; string | null
-  availableBalance(accountId: string) -&gt; long
-  hold(accountId: string, amount: long, operationId: string) -&gt; boolean
-  capture(operationId: string) -&gt; void
-  release(operationId: string) -&gt; void
+<div class="codebox"><div class="codebar"><span class="code-title">BankGateway</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>interface BankGateway
+  + authenticate(cardId: string, pin: string) -&gt; string | null
+  + availableBalance(accountId: string) -&gt; long
+  + hold(accountId: string, amount: long, operationId: string) -&gt; boolean
+  + capture(operationId: string) -&gt; void
+  + release(operationId: string) -&gt; void
 </code></pre></div>
 <p><code>hold</code> checks available funds and reserves them atomically at the bank. <code>false</code> means the bank definitely declined and created no hold. An exception means we do not know the result. <code>capture</code> converts the reservation into a debit. <code>release</code> removes the reservation. Available balance excludes active holds.</p>
 <p>These are requirements of our bank adapter, not a claim that every bank exposes this exact API. The exercise assumes a hold stays valid until capture or release. Real expiry and recovery rules need an agreement with the bank.</p>
 <h3 id="cashinventory">CashInventory<a aria-label="Link to CashInventory" class="heading-anchor" href="#cashinventory">#</a></h3>
 <p>The inventory answers two different questions: “Can we make this amount?” and “Which notes definitely left the machine?” Planning must not remove notes.</p>
-<div class="codebox"><div class="codebar"><span class="code-title">CashInventory</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>CashInventory
-  notes: Map&lt;long, int&gt;                 // denomination in paise -&gt; count
-  plan(amount: long) -&gt; Map&lt;long, int&gt; | null
-  recordDispensed(plan: Map&lt;long, int&gt;) -&gt; void
-  snapshot() -&gt; Map&lt;long, int&gt;
+<div class="codebox"><div class="codebar"><span class="code-title">CashInventory</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>CashInventory                         // internal to ATM
+  - notes: Map&lt;long, int&gt;                // denomination in paise -&gt; count
+  + CashInventory(notes: Map&lt;long, int&gt;)
+  + plan(amount: long) -&gt; Map&lt;long, int&gt; | null
+  + recordDispensed(plan: Map&lt;long, int&gt;) -&gt; void
+  + snapshot() -&gt; Map&lt;long, int&gt;
 </code></pre></div>
-<p>The ATM owns this object and serializes access to it. The constructor copies the initial stock. A snapshot returns a copy, so changing the returned map cannot create cash inside the machine.</p>
+<p>The ATM owns this object and serializes access to it. The constructor copies the initial stock. A snapshot returns a copy, so changing either map cannot change the machine's stock.</p>
+<p><code>plan</code> returns a separate map, such as <code>{20000: 3}</code> for three ₹200 notes. A missing plan means the amount cannot be made. Only ATM passes a successful plan to <code>recordDispensed</code>, while still holding its lock. Neither the customer nor the hardware adapter can edit the stored inventory.</p>
 <h3 id="hardware">Hardware<a aria-label="Link to Hardware" class="heading-anchor" href="#hardware">#</a></h3>
-<div class="codebox"><div class="codebar"><span class="code-title">Hardware</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Hardware
-  dispense(notes: Map&lt;long, int&gt;) -&gt; string
-  ejectCard() -&gt; void
+<div class="codebox"><div class="codebar"><span class="code-title">Hardware</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>interface Hardware
+  + dispense(notes: Map&lt;long, int&gt;) -&gt; string
+  + ejectCard() -&gt; void
 </code></pre></div>
 <p>The dispenser reports <code>ALL</code> only when the exact bundle reached the customer. <code>NONE</code> means no cash was delivered. <code>UNKNOWN</code> covers uncertainty and partial delivery. A timeout is also uncertain. Those meanings must come from the hardware adapter, not from guessing based on an exception message.</p>
 <h2 id="implementation">Implementation<a aria-label="Link to Implementation" class="heading-anchor" href="#implementation">#</a></h2>
@@ -427,10 +503,10 @@ Out of scope:
     <span class="bp">self</span><span class="o">.</span><span class="n">_limit</span> <span class="o">=</span> <span class="n">withdrawal_limit</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span> <span class="o">=</span> <span class="n">Lock</span><span class="p">()</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">=</span> <span class="s2">"IDLE"</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_card</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_account</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">_card</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">_account</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_attempts</span> <span class="o">=</span> <span class="mi">0</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 </code></pre><pre aria-labelledby="code-3-java-tab" hidden="" id="code-3-java" role="tabpanel" tabindex="0"><code><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">BankGateway</span><span class="w"> </span><span class="n">bank</span><span class="p">;</span>
 <span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Hardware</span><span class="w"> </span><span class="n">hardware</span><span class="p">;</span>
 <span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CashInventory</span><span class="w"> </span><span class="n">cash</span><span class="p">;</span>
@@ -841,10 +917,10 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
         <span class="bp">self</span><span class="o">.</span><span class="n">_limit</span> <span class="o">=</span> <span class="n">withdrawal_limit</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span> <span class="o">=</span> <span class="n">Lock</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">=</span> <span class="s2">"IDLE"</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_card</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_account</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_card</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_account</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_attempts</span> <span class="o">=</span> <span class="mi">0</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">insert_card</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">card_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">:</span>

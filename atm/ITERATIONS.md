@@ -40,7 +40,7 @@ Choose a concrete interview scope: card/session/PIN flow, balance inquiry, withd
 
 ## Iteration results
 
-No iterations completed yet. Append one entry per run with references actually inspected, concrete findings, changes, validation, commit and deployment status. If a comparison finds no justified change, record that honestly rather than inventing a flaw.
+Results are recorded below in execution order. Each entry identifies its assigned iteration number.
 
 ### Iteration 1 — first complete article (2026-11-04)
 
@@ -52,3 +52,12 @@ No iterations completed yet. Append one entry per run with references actually i
 - Validation: 14 Python tests passed. Java scenario tests passed. Each language checked 540 small inventory/amount combinations against exhaustive possibilities. Covered successful withdrawal, shortages, bank decline, invalid states/amounts, PIN retries, cancel/ejection, uncertain dispensing, hold/capture/release failures, and concurrent note use. Reassembled both languages from rendered HTML and ran their behavior tests successfully. Checked all local links, unique IDs, nine language-tab pairs, and verification nesting. Chrome confirmed Java tab switching and desktop layout. Detailed mobile/wide-screen comparison remains scheduled for iteration 8.
 - Publication: commit for this iteration is the commit containing this entry, followed by a deployment-verification log entry. Target: /atm/. No Splitwise files changed.
 - Deployment verified: article commit `d54c59adde7bbe2356b58ff82dd94b78714b77a8`, GitHub Pages [run 41717574219](https://github.com/YashPandit4u/low-level-design/actions/runs/41717574219) build and deploy jobs succeeded. The live /atm/ returned HTML byte-for-byte identical to the tested local page (SHA-256 `075810a51e9e3be225db71a8592c28d482d1337584b0a865ceeda1a31a02e6b5`). Iteration 1 complete. Remaining iterations are separate scheduled prompts.
+
+### Iteration 3 — entities, types, and API boundaries (2026-11-04)
+
+- Preceding results: reviewed iteration 1, including its verified deployment. Iteration 2 has no completed log entry. Recovered the necessary scope prerequisite by checking the existing clarification and requirements against the reference and explicitly stating one machine, one session, and concurrent callers. This does not mark iteration 2's separate review complete.
+- Reference actually inspected in Chrome: Inventory Management, Requirements through Final Requirements, entity-candidate filtering, InventoryManager and Warehouse class design, AlertConfig/AlertListener ownership, and Final Class Design. Read the actual article text and inspected its class-design screenshot and right navigation.
+- Concrete gaps: ATM fields appeared without requirement-to-state reasoning; constructors and the meaningful session-ending helper were absent from sketches; private state versus caller operations was unclear; `withdraw -> string` left result semantics implicit; startup adapter injection was insufficiently distinguished from customer operations.
+- Changes: derive ATM state from requirements, explain the session-as-fields decision, identify the screen controller's simple inputs and authenticated account ownership, add typed constructors and visibility notation, document result strings and cancellation's physical-ejection limitation, and clarify inventory plan/snapshot ownership. Added nullable Python field annotations to match the documented types. No new classes, wrappers, patterns, UI components, or money-operation behavior.
+- Validation: rebuilt Markdown and both HTML aliases. Page checks passed for links, unique IDs, all nine tab pairs, and class-based navigation. Both rendered language walkthroughs were reassembled and passed their behavioral suites: 14 Python tests and Java scenarios, including 540 exact-allocation checks per language and concurrent withdrawal. Splitwise unchanged.
+- Publication: article commit is the commit containing this entry. Live deployment verification follows below.

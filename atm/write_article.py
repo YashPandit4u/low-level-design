@@ -38,6 +38,8 @@ The screen makes this look simple. The difficult moment comes after the bank app
 
 ## Requirements
 
+Start with a small prompt: “Design an ATM that authenticates a customer and lets them check their balance or withdraw cash.” Before choosing classes, establish who owns the account and what happens when cash delivery fails.
+
 ### Clarifying questions
 
 > **You:** Which operations should we support? Do we need deposits and transfers?
@@ -55,6 +57,10 @@ The screen makes this look simple. The difficult moment comes after the bank app
 > **You:** Which notes are available, and what should happen after a wrong PIN?
 >
 > **Interviewer:** Note denominations and counts are configured at startup. Reject a withdrawal if no exact bundle is available. Allow three rejected PIN attempts per inserted-card session, then eject the card.
+
+> **You:** Are we designing one machine or a fleet? Can requests overlap?
+>
+> **Interviewer:** One ATM with one active card session. Calls may arrive from different threads, so serialize them. The bank handles account activity from other machines.
 
 > **You:** Are we handling real hardware and process crashes?
 >
@@ -87,7 +93,11 @@ We model successful card ejection as a hardware call. If that call fails, the AT
 
 ## Core entities and relationships
 
-Start with the nouns in the requirements: ATM, card, account, bank, notes, and dispenser. Not every noun needs a class.
+Start with the nouns in the requirements: ATM, session, card, account, bank, notes, and dispenser. Keep a class when it owns changing state, enforces a rule, or represents an external dependency.
+
+The **ATM** needs to remember the active card and allowed operations. **CashInventory** needs to track note counts and find valid bundles. **BankGateway** and **Hardware** define the operations we need from systems outside that local state.
+
+A session is just a few fields on this one ATM. It does not need its own class yet. We would reconsider that if sessions had a separate lifecycle or were stored independently.
 
 | Entity | Responsibility |
 | --- | --- |
@@ -98,37 +108,67 @@ Start with the nouns in the requirements: ATM, card, account, bank, notes, and d
 
 A card ID and an account ID are strings. We do not need a Customer or Account class because their data belongs to the bank. A map from denomination to count represents the cash stock. There is no useful behavior to put on an individual Banknote object here.
 
-The ATM creates its own CashInventory. The bank and hardware implementations are supplied at startup. A customer-facing call is just `withdraw(amount)`, not a request to construct one of these internal objects.
+The ATM creates and owns one CashInventory. Startup code supplies the bank adapter and a hardware adapter for this machine. The screen controller calls ATM with a card ID, PIN, or amount. It never calls the bank or changes inventory directly.
+
+For example, the controller calls `insertCard("card-A")`, then `enterPin("1234")`. Only after a successful PIN check can it call `withdraw(60000)` for ₹600. It does not supply an account ID for withdrawal. ATM uses the account returned by the bank for this session.
 
 ## Class design
 
+We will start with the entry point, ATM, then define its dependencies. In these sketches, `-` marks private state or a private helper. `+` marks an operation available to the class’s caller. CashInventory’s caller is ATM, not the screen controller.
+
 ### ATM
 
-The ATM owns the session. Keeping that state in one place prevents a successful PIN check from accidentally authorizing a later customer's card.
+The ATM owns the session. Let's connect the requirements to the state it needs:
+
+| Requirement | State ATM needs |
+| --- | --- |
+| Accept one card and require authentication | Card ID, account ID, and current state |
+| End the session after three rejected PINs | Attempt count |
+| Respect the withdrawal limit and available notes | Limit and owned CashInventory |
+| Stop after an uncertain withdrawal | Pending operation ID and OUT_OF_SERVICE state |
+| Serialize requests on this machine | One lock shared by its operations |
+
+The card ID identifies what was inserted. The account ID comes from successful authentication and is cleared when the session ends. Keeping both private prevents the caller from choosing a different account for a withdrawal.
 
 ```text
 ATM
-  bank: BankGateway
-  hardware: Hardware
-  cash: CashInventory
-  withdrawalLimit: long              // paise
-  state: string                      // IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
-  card: string | null
-  account: string | null
-  attempts: int
-  pending: string | null             // unresolved withdrawal operation ID
+  - bank: BankGateway
+  - hardware: Hardware
+  - cash: CashInventory
+  - withdrawalLimit: long              // paise
+  - state: string                      // IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
+  - card: string | null
+  - account: string | null
+  - attempts: int
+  - pending: string | null             // unresolved withdrawal operation ID
+  - lock: Lock                         // Java uses this object's monitor
 
-  insertCard(cardId: string) -> void
-  enterPin(pin: string) -> boolean
-  balance() -> long
-  withdraw(amount: long) -> string
-  cancel() -> void
-  state() -> string
-  pendingOperation() -> string | null
-  cashSnapshot() -> Map<long, int>
+  + ATM(bank: BankGateway, hardware: Hardware,
+        notes: Map<long, int>, withdrawalLimit: long)
+  + insertCard(cardId: string) -> void
+  + enterPin(pin: string) -> boolean
+  + balance() -> long                   // available balance in paise
+  + withdraw(amount: long) -> string    // amount in paise
+  + cancel() -> void
+  + state() -> string
+  + pendingOperation() -> string | null
+  + cashSnapshot() -> Map<long, int>
+  - endSession(outOfService: boolean) -> void
 ```
 
 Python uses `int` for money. Java uses `long` and `Map<Long, Integer>` for note counts. Python's `status()` returns the state and pending ID together. These inspection methods are for tests and maintenance, not account operations.
+
+`enterPin` returns true when authentication succeeds and false when the bank rejects the card or PIN. Invalid input or an operation in the wrong state raises an error. `withdraw` returns a short result string for an attempted withdrawal:
+
+| Result | Meaning for the caller |
+| --- | --- |
+| SUCCESS | The full bundle was delivered and the bank confirmed the debit. |
+| CASH_UNAVAILABLE | No exact bundle is available. The bank was not asked to reserve funds. |
+| DECLINED | The bank rejected the hold. No dispensing was attempted. |
+| NOT_DISPENSED | No cash was delivered and the bank confirmed release of the hold. |
+| PENDING_REVIEW | The outcome needs review. Do not treat it as success or retry as a new withdrawal. |
+
+`cancel` ends the session and attempts ejection. It does not promise that a stuck card was physically returned. The controller can read the state to see whether the ATM was taken out of service.
 
 | Current state | Event | Next state |
 | --- | --- | --- |
@@ -161,12 +201,12 @@ Use strings for this walkthrough. The transitions are the important part, not an
 The bank owns money. In particular, a balance check followed by an unrelated debit is not enough: another ATM could spend the same funds between those calls.
 
 ```text
-BankGateway
-  authenticate(cardId: string, pin: string) -> string | null
-  availableBalance(accountId: string) -> long
-  hold(accountId: string, amount: long, operationId: string) -> boolean
-  capture(operationId: string) -> void
-  release(operationId: string) -> void
+interface BankGateway
+  + authenticate(cardId: string, pin: string) -> string | null
+  + availableBalance(accountId: string) -> long
+  + hold(accountId: string, amount: long, operationId: string) -> boolean
+  + capture(operationId: string) -> void
+  + release(operationId: string) -> void
 ```
 
 `hold` checks available funds and reserves them atomically at the bank. `false` means the bank definitely declined and created no hold. An exception means we do not know the result. `capture` converts the reservation into a debit. `release` removes the reservation. Available balance excludes active holds.
@@ -178,21 +218,24 @@ These are requirements of our bank adapter, not a claim that every bank exposes 
 The inventory answers two different questions: “Can we make this amount?” and “Which notes definitely left the machine?” Planning must not remove notes.
 
 ```text
-CashInventory
-  notes: Map<long, int>                 // denomination in paise -> count
-  plan(amount: long) -> Map<long, int> | null
-  recordDispensed(plan: Map<long, int>) -> void
-  snapshot() -> Map<long, int>
+CashInventory                         // internal to ATM
+  - notes: Map<long, int>                // denomination in paise -> count
+  + CashInventory(notes: Map<long, int>)
+  + plan(amount: long) -> Map<long, int> | null
+  + recordDispensed(plan: Map<long, int>) -> void
+  + snapshot() -> Map<long, int>
 ```
 
-The ATM owns this object and serializes access to it. The constructor copies the initial stock. A snapshot returns a copy, so changing the returned map cannot create cash inside the machine.
+The ATM owns this object and serializes access to it. The constructor copies the initial stock. A snapshot returns a copy, so changing either map cannot change the machine's stock.
+
+`plan` returns a separate map, such as `{20000: 3}` for three ₹200 notes. A missing plan means the amount cannot be made. Only ATM passes a successful plan to `recordDispensed`, while still holding its lock. Neither the customer nor the hardware adapter can edit the stored inventory.
 
 ### Hardware
 
 ```text
-Hardware
-  dispense(notes: Map<long, int>) -> string
-  ejectCard() -> void
+interface Hardware
+  + dispense(notes: Map<long, int>) -> string
+  + ejectCard() -> void
 ```
 
 The dispenser reports `ALL` only when the exact bundle reached the customer. `NONE` means no cash was delivered. `UNKNOWN` covers uncertainty and partial delivery. A timeout is also uncertain. Those meanings must come from the hardware adapter, not from guessing based on an exception message.

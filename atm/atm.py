@@ -85,10 +85,10 @@ class ATM:
         self._limit = withdrawal_limit
         self._lock = Lock()
         self._state = "IDLE"
-        self._card = None
-        self._account = None
+        self._card: str | None = None
+        self._account: str | None = None
         self._attempts = 0
-        self._pending = None
+        self._pending: str | None = None
 
     def insert_card(self, card_id: str) -> None:
         with self._lock:
