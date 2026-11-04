@@ -559,6 +559,10 @@ A failed balance read should leave the authenticated session open because it cha
 
 For cancellation during withdrawal, pause the fake dispenser and start cancellation on another thread. Cancellation must wait without ejecting. After ALL, finish capture and then eject. After UNKNOWN, end out of service and retain the pending ID. The waiting cancellation must not clear it or eject a second time.
 
+Check ownership across the public API too. Authenticate card A, cancel, then authenticate card B. Balance and withdrawal calls must use B's account. The caller never supplies that account ID. Also change the startup stock map and a returned snapshot: neither should change stored stock. Python allows editing its snapshot copy. Java rejects edits to its unmodifiable snapshot.
+
+Test a withdrawal exactly at the configured limit. It should succeed when funds and notes are available. A second request for the same note must report CASH_UNAVAILABLE after the first request uses it.
+
 The included tests also compare the planner against all combinations of several small inventories. That checks exact amounts, available counts, and planning without mutation instead of only checking one happy path.
 
 Run the tests from the repository root:

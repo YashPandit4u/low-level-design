@@ -160,7 +160,49 @@ public final class ATMTest {
         }
     }
 
+    static void accountAndStockBoundaries() {
+        List<String> seen = new ArrayList<>();
+        Bank bank = new Bank() {
+            public String authenticate(String card, String pin) {
+                return pin.equals("1234") ? "account-" + card : null;
+            }
+            public long availableBalance(String account) {
+                seen.add("balance:" + account);
+                return super.availableBalance(account);
+            }
+            public boolean hold(String account, long amount, String id) {
+                seen.add("hold:" + account);
+                return super.hold(account, amount, id);
+            }
+        };
+        Device device = new Device();
+        ATM atm = new ATM(bank, device, Map.of(20000L, 2), 20000);
+        for (String card : List.of("A", "B")) {
+            atm.insertCard(card); check(atm.enterPin("1234"));
+            seen.clear();
+            atm.balance();
+            check(atm.withdraw(20000).equals("SUCCESS"));
+            check(seen.equals(List.of("balance:account-" + card,
+                    "hold:account-" + card, "balance:account-" + card)));
+            atm.cancel();
+        }
+        bank = new Bank(); device = new Device();
+        Map<Long, Integer> stock = new HashMap<>(Map.of(20000L, 1));
+        atm = new ATM(bank, device, stock, 20000);
+        stock.put(20000L, 99);
+        atm.insertCard("card-A"); check(atm.enterPin("1234"));
+        var snapshot = atm.cashSnapshot();
+        try { snapshot.put(20000L, 88); throw new AssertionError(); }
+        catch (UnsupportedOperationException expected) { }
+        check(atm.withdraw(20000).equals("SUCCESS"));
+        check(snapshot.get(20000L) == 1);
+        check(atm.cashSnapshot().equals(Map.of(20000L, 0)));
+        check(atm.withdraw(20000).equals("CASH_UNAVAILABLE"));
+        check(bank.funds == 80000 && device.calls == 1);
+    }
+
     public static void main(String[] args) throws Exception {
+        accountAndStockBoundaries();
         cancellationDuringDispensing();
         shortageThenSuccess();
         sessionTransitions();

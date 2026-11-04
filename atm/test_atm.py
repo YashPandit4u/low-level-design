@@ -279,6 +279,42 @@ class ATMTest(unittest.TestCase):
                 self.assertEqual(self.bank.funds, 80000 if outcome == 'ALL' else 100000)
                 self.assertEqual(bool(self.bank.holds), outcome == 'UNKNOWN')
 
+    def test_new_session_uses_new_authenticated_account(self):
+        seen = []
+        class AccountBank(FakeBank):
+            def authenticate(self, card, pin):
+                return 'account-' + card if pin == '1234' else None
+            def available_balance(self, account):
+                seen.append(('balance', account))
+                return super().available_balance(account)
+            def hold(self, account, amount, operation):
+                seen.append(('hold', account))
+                return super().hold(account, amount, operation)
+        self.atm = ATM(AccountBank(), self.hardware, {20000: 2})
+        for card in ['A', 'B']:
+            self.atm.insert_card(card)
+            self.assertTrue(self.atm.enter_pin('1234'))
+            seen.clear()
+            self.atm.balance()
+            self.assertEqual(self.atm.withdraw(20000), 'SUCCESS')
+            self.assertEqual(seen, [('balance', 'account-' + card),
+                                    ('hold', 'account-' + card),
+                                    ('balance', 'account-' + card)])
+            self.atm.cancel()
+
+    def test_owned_stock_and_exact_limit(self):
+        stock = {20000: 1}
+        self.atm = ATM(self.bank, self.hardware, stock, 20000)
+        stock[20000] = 99
+        self.login()
+        snapshot = self.atm.cash_snapshot()
+        snapshot[20000] = 88
+        self.assertEqual(self.atm.withdraw(20000), 'SUCCESS')
+        self.assertEqual(self.atm.cash_snapshot(), {20000: 0})
+        self.assertEqual(self.atm.withdraw(20000), 'CASH_UNAVAILABLE')
+        self.assertEqual(self.bank.funds, 80000)
+        self.assertEqual(self.hardware.dispensed, [{20000: 1}])
+
     def test_planner_against_exhaustive_small_inventories(self):
         for counts in itertools.product(range(3), repeat=3):
             inventory = dict(zip([5, 3, 2], counts))

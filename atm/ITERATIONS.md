@@ -172,3 +172,12 @@ Results are recorded below in execution order. Each entry identifies its assigne
 - Publication: article commit contains this entry. Deployment verification follows below.
 
 - Deployment verified: commit `7dee8a8ec95c5aa0534a602bbd729bf743fde077`; [Pages run 41782623132](https://github.com/YashPandit4u/low-level-design/actions/runs/41782623132) succeeded. Live `/atm/` matches tested HTML byte for byte, SHA-256 `a6dfcbb3498cc858902ca1145bd92266ad06f05d0c5120a322184845a6ec559a`. **Iteration 11 complete.** Reviews 12–15 remain scheduled.
+
+### Iteration 12 — language parity and public boundaries (2026-11-04)
+
+- Read the full review log and confirmed review 11 was deployed. Compared the Python and Java methods, ownership, types, and existing behavior tests.
+- Reference actually read in Chrome: Connect Four's Board and Player class-design sections, requirement-to-field and requirement-to-method tables, typed sketches, and boundary explanations. Inspected the actual page UI. Used its focus on simple public inputs and ownership without adding wrappers.
+- Concrete gaps: the fake bank previously accepted account IDs without checking which authenticated session supplied them. Constructor stock-copy ownership and exact-limit success lacked matching end-to-end tests in both languages. Snapshot mutability differs intentionally by language and deserved an explicit verification example.
+- Changes: added matching tests for two successive authenticated accounts, balance/hold account routing, startup-map isolation, returned-snapshot isolation, exact-limit success and subsequent depleted-stock rejection. Added concise verification guidance inside Implementation. Python snapshot mutation and Java unmodifiable-map rejection are both tested. No production behavior or additional validation/helper layers were needed.
+- Validation: rebuilt Markdown and both HTML aliases. Rendered Python matches source AST and passes 22 tests. Rendered Java passes all scenarios, including account routing, concurrent cancellation and 540 allocation checks. All 11 language pairs, links, IDs and verification nesting pass. Splitwise unchanged.
+- Publication: article commit contains this entry. Deployment verification follows below.
