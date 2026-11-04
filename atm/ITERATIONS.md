@@ -107,3 +107,12 @@ Results are recorded below in execution order. Each entry identifies its assigne
 
 - Deployment verified: commit `794e769a89adcadbf73f1e9b117095be5216884e`; [Pages run 41776546986](https://github.com/YashPandit4u/low-level-design/actions/runs/41776546986) succeeded. Live `/atm/` matches generated HTML byte for byte (SHA-256 `f4230057780fb59ff9ffc21562c73d195b2dda7d13038b82fc4ee9c5e22a1d8e`).
 - **Iteration 2 complete.** Six numbered reviews are complete: 1, 2, 3, 4, 8, 10. Reviews 5, 6, 7, 9 remain scheduled.
+
+### Iteration 5 — sessions, transitions, and card handling (2026-11-04, recovery pass)
+
+- Reviewed all preceding results, including iteration 2's deployed clarification changes. This pass preserves those scope decisions and the later UI/implementation improvements.
+- Reference actually read in Chrome: Connect Four's requirements, Game state derivation and expanded GameState comparison, makeMove core logic and invalid-state checks, and the verification trace. Inspected its actual comparison UI. Applied its explicit before/after state reasoning without copying its content or adding UI.
+- Concrete gaps: session verification was a single summary paragraph; cancellation before authentication and attempt reset across sessions lacked direct coverage. Rejection of another card was not tested together with subsequent authentication of the original card. Java lacked an authentication-outage test. The transition table did not explicitly condition returning to IDLE on successful ejection.
+- Changes: clarified illegal operations, no-op cancellation, successful-ejection transitions, and empty-PIN handling before the relevant code. Added a short session trace inside Implementation's verification. Added Python/Java scenarios for original-card preservation, rejected reauthentication, cancellation before PIN entry, reset attempt counts, terminal ejection failure after three rejected PINs, and Java authentication outage. Existing session logic passed without modification; no new helpers in teaching code or UI components.
+- Validation: rebuilt Markdown and both HTML aliases. Rendered source passes 18 Python tests and Java scenarios, including 540 allocation checks per language. Exact Python AST/source checks, all 11 tab pairs, local links, unique IDs, and verification nesting pass. Splitwise unchanged.
+- Publication: article commit contains this entry. Deployment verification follows below.

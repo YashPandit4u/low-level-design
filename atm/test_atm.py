@@ -97,6 +97,37 @@ class ATMTest(unittest.TestCase):
         self.assertEqual(self.hardware.ejections, 1)
         with self.assertRaises(ValueError): self.atm.balance()
 
+    def test_pin_session_preserves_card_and_resets_attempts(self):
+        self.atm.insert_card('card-A')
+        self.assertFalse(self.atm.enter_pin('bad'))
+        with self.assertRaises(ValueError): self.atm.insert_card('card-B')
+        with self.assertRaises(ValueError): self.atm.enter_pin('')
+        self.assertTrue(self.atm.enter_pin('1234'))
+        with self.assertRaises(ValueError): self.atm.enter_pin('bad')
+        self.assertEqual(self.atm.status(), ('READY', None))
+        self.atm.cancel()
+        self.atm.insert_card('card-A')
+        self.assertFalse(self.atm.enter_pin('bad'))
+        self.atm.cancel()  # Cancellation before authentication also resets attempts.
+        self.atm.insert_card('card-A')
+        for _ in range(2):
+            self.assertFalse(self.atm.enter_pin('bad'))
+            self.assertEqual(self.atm.status(), ('PIN_REQUIRED', None))
+        self.assertFalse(self.atm.enter_pin('bad'))
+        self.assertEqual(self.atm.status(), ('IDLE', None))
+        self.assertEqual(self.hardware.ejections, 3)
+        with self.assertRaises(ValueError): self.atm.balance()
+
+    def test_ejection_failure_during_pin_lockout_is_terminal(self):
+        self.atm.insert_card('card-A')
+        self.hardware.eject_fails = True
+        for _ in range(3): self.assertFalse(self.atm.enter_pin('bad'))
+        self.assertEqual(self.atm.status(), ('OUT_OF_SERVICE', None))
+        self.atm.cancel()
+        with self.assertRaises(ValueError): self.atm.insert_card('card-A')
+        with self.assertRaises(ValueError): self.atm.enter_pin('1234')
+        self.assertEqual(self.hardware.ejections, 1)
+
     def test_cash_unavailable_has_no_bank_side_effect(self):
         self.login()
         self.assertEqual(self.atm.withdraw(10000), 'CASH_UNAVAILABLE')

@@ -7,6 +7,7 @@ public final class ATMTest {
         Map<String, Long> holds = new HashMap<>();
         String fail = "";
         public String authenticate(String card, String pin) {
+            if (fail.equals("authenticate")) throw new RuntimeException();
             return card.equals("card-A") && pin.equals("1234") ? "account-A" : null;
         }
         public long availableBalance(String account) {
@@ -53,7 +54,53 @@ public final class ATMTest {
         check(atm.enterPin("1234"));
         return atm;
     }
+    static void sessionTransitions() {
+        Bank bank = new Bank(); Device device = new Device();
+        ATM atm = new ATM(bank, device, Map.of(20000L, 3), 100000);
+        atm.insertCard("card-A");
+        check(!atm.enterPin("bad"));
+        try { atm.insertCard("card-B"); throw new AssertionError(); }
+        catch (IllegalStateException expected) { }
+        try { atm.enterPin(""); throw new AssertionError(); }
+        catch (IllegalArgumentException expected) { }
+        check(atm.enterPin("1234"));
+        try { atm.enterPin("bad"); throw new AssertionError(); }
+        catch (IllegalStateException expected) { }
+        check(atm.state().equals("READY"));
+        atm.cancel();
+        atm.insertCard("card-A");
+        check(!atm.enterPin("bad"));
+        atm.cancel();
+        atm.insertCard("card-A");
+        for (int i = 0; i < 2; i++) {
+            check(!atm.enterPin("bad"));
+            check(atm.state().equals("PIN_REQUIRED"));
+        }
+        check(!atm.enterPin("bad"));
+        check(atm.state().equals("IDLE") && device.ejections == 3);
+        try { atm.balance(); throw new AssertionError(); }
+        catch (IllegalStateException expected) { }
+        atm.insertCard("card-A");
+        device.ejectFails = true;
+        for (int i = 0; i < 3; i++) check(!atm.enterPin("bad"));
+        check(atm.state().equals("OUT_OF_SERVICE"));
+        atm.cancel();
+        try { atm.insertCard("card-A"); throw new AssertionError(); }
+        catch (IllegalStateException expected) { }
+        check(device.ejections == 4);
+
+        bank = new Bank(); device = new Device();
+        atm = new ATM(bank, device, Map.of(20000L, 1), 100000);
+        atm.insertCard("card-A");
+        bank.fail = "authenticate";
+        try { atm.enterPin("1234"); throw new AssertionError(); }
+        catch (RuntimeException expected) { }
+        check(atm.state().equals("OUT_OF_SERVICE") && device.ejections == 1);
+        check(atm.pendingOperation() == null);
+    }
+
     public static void main(String[] args) throws Exception {
+        sessionTransitions();
         Bank bank = new Bank(); Device device = new Device();
         ATM atm = ready(bank, device);
         check(atm.withdraw(60000).equals("SUCCESS"));

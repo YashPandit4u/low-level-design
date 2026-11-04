@@ -301,12 +301,12 @@ Out of scope:
 <tr>
 <td>PIN_REQUIRED</td>
 <td>Third rejected PIN</td>
-<td>IDLE after ejection</td>
+<td>IDLE if ejection succeeds</td>
 </tr>
 <tr>
 <td>PIN_REQUIRED or READY</td>
 <td>Cancel</td>
-<td>IDLE after ejection</td>
+<td>IDLE if ejection succeeds</td>
 </tr>
 <tr>
 <td>READY</td>
@@ -320,6 +320,7 @@ Out of scope:
 </tr>
 </tbody>
 </table>
+<p>Operations that are not allowed in the current state fail before changing the session. Cancelling while IDLE or OUT_OF_SERVICE does nothing. There is no customer operation that brings an OUT_OF_SERVICE machine back online.</p>
 <p>An authentication outage also ends the session and disables this teaching ATM. A failed balance read changes no money or session state, so the error can be shown while leaving the customer authenticated.</p>
 <p>Do we need the State pattern?</p>
 <details class="comparison neutral"><summary><span class="comparison-title">Good Solution: One class per state</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>A State interface can make sense when each state handles many operations differently. It also allows states to be tested separately. Here it would spread four short guards over several classes without making the withdrawal flow easier to follow.</p></div></details>
@@ -584,7 +585,7 @@ Out of scope:
 <p><strong>Edge cases:</strong></p>
 <ul>
 <li>A second card arrives during a session: reject it without replacing the first card.</li>
-<li>Empty input: reject it before calling the bank.</li>
+<li>Empty input: reject it before calling the bank. It does not count as a rejected PIN attempt.</li>
 <li>Bank authentication fails with an exception: end the session and take the ATM out of service.</li>
 <li>Repeated PIN submissions after success: reject them because the ATM is already READY.</li>
 </ul>
@@ -763,7 +764,7 @@ Out of scope:
 <p>There is no automatic retry here. Calling <code>withdraw</code> again starts a new operation. In production, a retry needs a stable request ID and a stored outcome. We'll cover that extension below.</p>
 <p><strong>Cancellation and ending the session</strong></p>
 <p>Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.</p>
-<p><code>end_session</code> is shared by cancellation, the third rejected PIN, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.</p>
+<p><code>end_session</code> is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.</p>
 <div class="codebox language-pair" data-code="code-9"><div class="codebar"><div aria-label="ATM language" role="tablist"><button aria-controls="code-9-python" aria-selected="true" data-lang="python" id="code-9-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-9-java" aria-selected="false" data-lang="java" id="code-9-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-9-python-tab" id="code-9-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">cancel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"PIN_REQUIRED"</span><span class="p">,</span> <span class="s2">"READY"</span><span class="p">):</span>
@@ -891,6 +892,17 @@ No refund and no second dispensing attempt
 </code></pre></div>
 <p>The test knows the bank applied the debit because it controls the fake. The ATM does not know that yet. Retaining the ID allows later review to resolve the outcome without moving money again. Check that <code>cancel</code> cannot bring the machine back online.</p>
 <h4 id="session-boundaries-and-concurrent-calls">Session boundaries and concurrent calls</h4>
+<p>Try a session trace as well. This checks that a rejected operation does not quietly change who is using the ATM.</p>
+<div class="codebox"><div class="codebar"><span class="code-title">Session boundaries and concurrent calls</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Insert card-A                 -&gt; PIN_REQUIRED, attempts = 0
+Enter a wrong PIN            -&gt; PIN_REQUIRED, attempts = 1
+Try to insert card-B         -&gt; error, card-A stays in the session
+Enter the correct PIN        -&gt; READY for card-A's account
+Cancel                       -&gt; IDLE, account cleared, card ejected
+Try to read the balance      -&gt; error, authentication required
+Insert card-A again          -&gt; PIN_REQUIRED, attempts = 0
+Reject three PINs            -&gt; IDLE, card ejected once more
+</code></pre></div>
+<p>Also cancel while waiting for a PIN. The next inserted card must get a fresh attempt count. If ejection fails instead, expect OUT_OF_SERVICE and reject the next card. Calling cancel again must not retry ejection or bring the ATM online.</p>
 <p>Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. A failed balance read should leave the authenticated session open because it changes no money. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.</p>
 <p>The included tests also compare the planner against all combinations of several small inventories. That checks exact amounts, available counts, and planning without mutation instead of only checking one happy path.</p>
 <p>Run the tests from the repository root:</p>

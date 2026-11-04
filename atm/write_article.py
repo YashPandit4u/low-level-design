@@ -197,10 +197,12 @@ Python uses `int` for money. Java uses `long` and `Map<Long, Integer>` for note 
 | IDLE | Insert a card | PIN_REQUIRED |
 | PIN_REQUIRED | Correct PIN | READY |
 | PIN_REQUIRED | First or second rejected PIN | PIN_REQUIRED |
-| PIN_REQUIRED | Third rejected PIN | IDLE after ejection |
-| PIN_REQUIRED or READY | Cancel | IDLE after ejection |
+| PIN_REQUIRED | Third rejected PIN | IDLE if ejection succeeds |
+| PIN_REQUIRED or READY | Cancel | IDLE if ejection succeeds |
 | READY | Completed or definitely declined withdrawal | READY |
 | Active session | Uncertain money operation or failed card ejection | OUT_OF_SERVICE |
+
+Operations that are not allowed in the current state fail before changing the session. Cancelling while IDLE or OUT_OF_SERVICE does nothing. There is no customer operation that brings an OUT_OF_SERVICE machine back online.
 
 An authentication outage also ends the session and disables this teaching ATM. A failed balance read changes no money or session state, so the error can be shown while leaving the customer authenticated.
 
@@ -369,7 +371,7 @@ article += '''
 **Edge cases:**
 
 - A second card arrives during a session: reject it without replacing the first card.
-- Empty input: reject it before calling the bank.
+- Empty input: reject it before calling the bank. It does not count as a rejected PIN attempt.
 - Bank authentication fails with an exception: end the session and take the ATM out of service.
 - Repeated PIN submissions after success: reject them because the ATM is already READY.
 
@@ -434,7 +436,7 @@ There is no automatic retry here. Calling `withdraw` again starts a new operatio
 
 Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.
 
-`end_session` is shared by cancellation, the third rejected PIN, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
+`end_session` is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
 
 '''
 article += pair(py_methods(['cancel','_end_session']),java_block('public synchronized void cancel')+'\n\n'+java_block('private void endSession'))
@@ -503,6 +505,21 @@ No refund and no second dispensing attempt
 The test knows the bank applied the debit because it controls the fake. The ATM does not know that yet. Retaining the ID allows later review to resolve the outcome without moving money again. Check that `cancel` cannot bring the machine back online.
 
 #### Session boundaries and concurrent calls
+
+Try a session trace as well. This checks that a rejected operation does not quietly change who is using the ATM.
+
+```text
+Insert card-A                 -> PIN_REQUIRED, attempts = 0
+Enter a wrong PIN            -> PIN_REQUIRED, attempts = 1
+Try to insert card-B         -> error, card-A stays in the session
+Enter the correct PIN        -> READY for card-A's account
+Cancel                       -> IDLE, account cleared, card ejected
+Try to read the balance      -> error, authentication required
+Insert card-A again          -> PIN_REQUIRED, attempts = 0
+Reject three PINs            -> IDLE, card ejected once more
+```
+
+Also cancel while waiting for a PIN. The next inserted card must get a fresh attempt count. If ejection fails instead, expect OUT_OF_SERVICE and reject the next card. Calling cancel again must not retry ejection or bring the ATM online.
 
 Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. A failed balance read should leave the authenticated session open because it changes no money. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.
 
