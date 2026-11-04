@@ -19,12 +19,14 @@
       tab.addEventListener('click',()=>{
         selectLanguage(box,tab.dataset.lang);
         save('splitwise-language',tab.dataset.lang);
+        requestAnimationFrame(updateProgress);
       });
       tab.addEventListener('keydown',e=>{
         if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
         e.preventDefault();
         const lang=e.key==='Home'?'python':e.key==='End'?'java':tab.dataset.lang==='python'?'java':'python';
         selectLanguage(box,lang,true);save('splitwise-language',lang);
+        requestAnimationFrame(updateProgress);
       });
     });
   });

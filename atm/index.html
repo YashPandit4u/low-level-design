@@ -25,7 +25,7 @@ article h5{font-size:17px;font-weight:600;margin:24px 0 16px;color:var(--text)}
 .editions{display:inline-flex;gap:4px;margin-top:14px;padding:4px;background:var(--soft);border:1px solid var(--border);border-radius:8px}.editions a{padding:5px 14px;border-radius:5px;font-size:13px;line-height:22px}.editions a[aria-current=page]{background:var(--paper);color:var(--primary);font-weight:600;box-shadow:0 1px 3px #0001}
 
 /* One shared shell keeps the header, article and navigation aligned at every width. */
-:root{--page-width:1360px;--page-gutter:clamp(20px,3vw,56px)}
+:root{--page-width:1048px;--page-gutter:clamp(20px,3vw,56px)}
 .topbar,.outer{width:min(var(--page-width),calc(100% - 2 * var(--page-gutter)));max-width:none;margin-inline:auto;padding-inline:0}
 .topbar{height:64px;gap:24px}.outer{padding-block:16px 40px}
 .layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:40px}
@@ -37,8 +37,8 @@ article{padding-right:0;overflow-wrap:break-word}
 .feature-card>div{min-width:0}.codebox,.table-wrap{max-width:100%}
 .requirements-panel pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7}
 .focus-mode{--page-width:800px}.focus-mode .toc{display:none}.focus-mode .layout{display:block}
-@media(min-width:1920px){.layout{grid-template-columns:minmax(0,1fr) 320px;gap:48px}}
-@media(max-width:1099px){:root{--page-width:860px}.layout{display:block}.toc{display:none}.topbar{gap:16px}}
+
+@media(max-width:1099px){:root{--page-width:740px}.layout{display:block}.toc{display:none}.topbar{gap:16px}}
 @media(max-width:767px){.topbar{height:56px}.outer{padding-top:24px}.feature-card{max-width:100%}}
 @media print{.outer{width:100%;padding:0}.layout{display:block}.toc{display:none}}
 
@@ -70,6 +70,9 @@ article{padding-right:0;overflow-wrap:break-word}
 .comparison[open]>summary>svg{transform:rotate(180deg)}
 .comparison-body{padding:8px 16px 16px}
 @media(prefers-reduced-motion:reduce){.comparison>summary,.comparison>summary>svg{transition:none}}
+
+/* Keep mobile heading scale close to the reference reading view. */
+@media(max-width:767px){article h2{font-size:23px;line-height:32px}article h3{font-size:20px;line-height:28px}}
 </style></head><body>
     <a class="skip" href="#article">Skip to article</a>
 
@@ -1249,12 +1252,14 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
       tab.addEventListener('click',()=>{
         selectLanguage(box,tab.dataset.lang);
         save('splitwise-language',tab.dataset.lang);
+        requestAnimationFrame(updateProgress);
       });
       tab.addEventListener('keydown',e=>{
         if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
         e.preventDefault();
         const lang=e.key==='Home'?'python':e.key==='End'?'java':tab.dataset.lang==='python'?'java':'python';
         selectLanguage(box,lang,true);save('splitwise-language',lang);
+        requestAnimationFrame(updateProgress);
       });
     });
   });
