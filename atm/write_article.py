@@ -11,8 +11,8 @@ def py_class(name):
     node = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name)
     return '\n'.join(python.splitlines()[node.lineno-1:node.end_lineno])
 
-def py_methods(names):
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ATM')
+def py_methods(names, class_name='ATM'):
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name)
     nodes = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
     return '\n\n'.join(textwrap.dedent('\n'.join(python.splitlines()[n.lineno-1:n.end_lineno])) for n in nodes)
 
@@ -242,7 +242,13 @@ The dispenser reports `ALL` only when the exact bundle reached the customer. `NO
 
 ## Implementation
 
-We'll spend most of our time on `ATM.withdraw` and `CashInventory.plan`. Withdrawal coordinates the bank and physical cash. Planning must find a valid bundle without changing inventory. We'll also implement the complete session flow so it is clear when those methods are allowed to run.
+We have four classes, but they do not all need the same amount of implementation work:
+
+- **BankGateway and Hardware:** define their contracts. Real bank communication and device drivers stay outside this exercise.
+- **CashInventory:** implement `plan` in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.
+- **ATM:** implement the session methods, then spend most of our time on `withdraw`. This is where bank funds and physical cash must agree.
+
+We'll build the dependencies first, then use them in ATM. Each method shown under a class belongs to that class. The complete files below put the methods and imports together.
 
 For the important operations, we'll explain the **Core logic** and **Edge cases** before the code. Simple methods get a shorter explanation. The bank and hardware are interfaces because their real implementations are outside this exercise. The tests provide working fakes for both.
 
@@ -254,6 +260,14 @@ Define the contracts first. Authentication returns an account ID or a rejected r
 article += pair(py_class('BankGateway')+'\n\n'+py_class('Hardware'), java_block('public interface BankGateway')+'\n\n'+java_block('public interface Hardware'))
 article += '''
 ### CashInventory
+
+Start with the stock we were given at startup. The constructor rejects nonpositive denominations and negative counts. Zero counts are valid: a cassette may be empty. Copy the map so later changes to the caller's configuration cannot change the ATM's stock.
+
+'''
+article += pair(py_methods(['__init__'], 'CashInventory'),
+                'private final Map<Long, Integer> notes;\n\n' + java_block('CashInventory(Map'))
+article += '''
+**Planning the bundle**
 
 Let's decide how to choose notes. Suppose the ATM has one ₹500 note and three ₹200 notes. A customer asks for ₹600. Taking ₹500 first gets stuck, but three ₹200 notes work.
 
@@ -269,9 +283,9 @@ Try the largest useful count of a denomination, then smaller counts if the remai
 
 A table can record which amounts are reachable and reconstruct a bundle. It is useful when we want predictable bounds over a modest amount range. It also introduces more bookkeeping, particularly when note counts are limited. We do not need it for this walkthrough.
 
-**Planning the bundle**
+**Implementing `plan`**
 
-The constructor validates the configured stock once. `plan` then receives a positive amount already checked by ATM.
+ATM has already checked that the amount is positive and within the withdrawal limit. The planner only needs to solve the note-selection problem.
 
 **Core logic:**
 
@@ -287,12 +301,27 @@ The constructor validates the configured stock once. `plan` then receives a posi
 - A larger-note choice gets stuck: try fewer of those notes.
 - Planning fails: leave every count unchanged.
 
-`find_bundle` is a meaningful algorithm helper. It keeps the recursive search inside inventory planning. This returns a valid bundle with a preference for larger notes, not a guarantee of the fewest notes for every possible denomination set.
+`plan` sorts the denominations and starts the search. Its helper, `find_bundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed returns `None` in Python or `null` in Java.
 
-`record_dispensed` subtracts the selected counts only after confirmed delivery. It is an internal operation using a plan from this same inventory while the ATM lock is still held. It does not revalidate customer input. `snapshot` returns an independent map.
+As a successful search returns, each level adds its chosen notes to that map. The code checks `is not None`, rather than whether the map is nonempty, because an empty map is a valid success at the end of the search.
+
+The `failed` set remembers combinations of index and remaining amount that could not work. For example, after proving that the smaller notes cannot make ₹100, another path does not need to repeat that search. This cache belongs to one planning call because stock may change before the next withdrawal.
+
+This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.
 
 '''
-article += pair(py_class('CashInventory'), java_block('static final class CashInventory'))
+article += pair(py_methods(['plan'], 'CashInventory'),
+                java_block('Map<Long, Integer> plan') + '\n\n' + java_block('private Map<Long, Integer> findBundle'))
+article += '''
+**Recording delivery and reading stock**
+
+`record_dispensed` is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of `{20000: 3}`, it subtracts three from the ₹200 count. Planning alone never calls this method.
+
+`snapshot` returns a separate map of counts. Python returns a mutable copy and Java returns an unmodifiable copy. In both cases, the stored inventory stays private.
+
+'''
+article += pair(py_methods(['record_dispensed', 'snapshot'], 'CashInventory'),
+                java_block('void recordDispensed') + '\n\n' + java_block('Map<Long, Integer> snapshot'))
 article += '''
 ### ATM
 
@@ -368,6 +397,10 @@ Capture after confirmed delivery. Release after confirmed non-delivery. For ever
 
 **The withdrawal method**
 
+Before calling the bank, save the new operation ID in `pending`. If the hold request times out, that ID is how we identify the request whose outcome is unknown. Clear it only after a definite decline, a confirmed release, or a confirmed capture.
+
+The `try` block starts at the first operation that can affect money. Invalid input and an unavailable cash bundle are handled before it. An exception inside the block leaves the operation pending and ends the session. The code does not attempt a refund from the exception handler.
+
 Notice that inventory is reduced before capture. Once delivery is confirmed, those notes are gone even if the capture response later times out. For UNKNOWN, the stored counts are only the last confirmed stock. They must not be treated as current stock until maintenance reconciles the machine.
 
 '''
@@ -379,14 +412,16 @@ There is no automatic retry here. Calling `withdraw` again starts a new operatio
 
 Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.
 
-`end_session` is shared by cancellation, rejected authentication, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
+`end_session` is shared by cancellation, the third rejected PIN, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
 
 '''
 article += pair(py_methods(['cancel','_end_session']),java_block('public synchronized void cancel')+'\n\n'+java_block('private void endSession'))
 article += '''
 **Inspecting the ATM**
 
-These methods let tests and maintenance inspect the machine without receiving its mutable inventory object. They take the same lock as writes. A pending ID is a clue for reconciliation, not permission to refund or restart the machine.
+`status` returns the current state and pending operation ID together in Python. Java exposes them through `state` and `pendingOperation`. These are reads, so none of them clears the pending ID.
+
+`cash_snapshot` delegates to the inventory's copying method. All these reads take the same lock as writes. A pending ID is a clue for reconciliation, not permission to refund or restart the machine.
 
 '''
 article += pair(py_methods(['status','cash_snapshot']),java_block('public synchronized String state')+'\n\n'+java_block('public synchronized String pendingOperation')+'\n\n'+java_block('public synchronized Map<Long, Integer> cashSnapshot'))

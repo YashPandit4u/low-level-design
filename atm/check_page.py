@@ -18,28 +18,43 @@ for box in soup.select('.language-pair'):
     for tab in tabs:
         panel = box.find(id=tab['aria-controls'])
         assert panel and panel['aria-labelledby'] == tab['id']
-assert len(soup.select('.language-pair')) == 9
+assert len(soup.select('.language-pair')) == 11
 assert len(soup.select('.requirements-panel')) == 1
 assert not soup.select('.toc a[href="#withdraw"]')
 assert soup.find(id='verification').find_previous('h2')['id'] == 'implementation'
 assert 'Splitwise' not in soup.get_text()
-# Reassemble the taught Python methods into a class and execute the same tests.
-blocks = [p.get_text() for p in soup.select('.language-pair pre[id$="-python"]')][:-1]
-imports = 'from __future__ import annotations\nfrom threading import Lock\nfrom typing import Protocol\nfrom uuid import uuid4\n'
-assembled = imports + '\n\n'.join(blocks[:2]) + '\n\nclass ATM:\n'
+# Group displayed excerpts by their owning class, not by panel position.
+def excerpts(language):
+    sections = {}
+    for panel in soup.select(f'.language-pair pre[id$="-{language}"]'):
+        if panel['id'].startswith('complete-code'): continue
+        heading = panel.find_previous('h3')['id']
+        sections.setdefault(heading, []).append(panel.get_text())
+    return sections
+
 import textwrap
-assembled += '\n\n'.join(textwrap.indent(code,'    ') for code in blocks[2:])
-assert ast.dump(ast.parse(assembled)).count('FunctionDef') == ast.dump(ast.parse((ROOT/'atm.py').read_text())).count('FunctionDef')
+blocks = excerpts('python')
+imports = 'from __future__ import annotations\nfrom threading import Lock\nfrom typing import Protocol\nfrom uuid import uuid4\n'
+assembled = imports + '\n\n'.join(blocks['bankgateway-and-hardware'])
+for heading, name in [('cashinventory_1', 'CashInventory'), ('atm_1', 'ATM')]:
+    assembled += f'\n\nclass {name}:\n'
+    assembled += '\n\n'.join(textwrap.indent(code,'    ') for code in blocks[heading])
+original_classes = {n.name: ast.dump(n) for n in ast.parse((ROOT/'atm.py').read_text()).body if isinstance(n, ast.ClassDef)}
+shown_classes = {n.name: ast.dump(n) for n in ast.parse(assembled).body if isinstance(n, ast.ClassDef)}
+assert shown_classes == original_classes, 'Displayed Python class differs from source'
 namespace = {'__name__':'article_atm'}
 exec(compile(assembled, '<article>', 'exec'),namespace)
 import test_atm, unittest
 test_atm.ATM, test_atm.CashInventory = namespace['ATM'], namespace['CashInventory']
 result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_atm))
 assert result.wasSuccessful()
-print('HTML links, IDs, 9 tab pairs, navigation, and assembled Python snippets passed.')
+print('HTML links, IDs, 11 tab pairs, navigation, and assembled Python snippets passed.')
 # Compile and run the Java walkthrough assembled from its displayed panels.
 import subprocess, tempfile
-java_blocks = [p.get_text() for p in soup.select('.language-pair pre[id$="-java"]')][:-1]
+java_sections = excerpts('java')
+java_blocks = java_sections['bankgateway-and-hardware'] + [
+    'static final class CashInventory {\n' + '\n'.join(java_sections['cashinventory_1']) + '\n}'
+] + java_sections['atm_1']
 with tempfile.TemporaryDirectory(prefix='atm-article-') as folder:
     folder = Path(folder)
     (folder/'ATM.java').write_text('import java.util.*;\npublic final class ATM {\n' + '\n'.join(java_blocks) + '\n}\n')
