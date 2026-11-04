@@ -194,3 +194,12 @@ Results are recorded below in execution order. Each entry identifies its assigne
 - Publication: article commit contains this entry. Deployment verification follows below.
 
 - Deployment verified: commit `7146db7b77db5f305c6e54a09d99f876dd2a342d`; [Pages run 41783814098](https://github.com/YashPandit4u/low-level-design/actions/runs/41783814098) succeeded. Live `/atm/` matches tested HTML byte for byte, SHA-256 `c513894ce5a4a9eb3881d8e4d22ab81ea7d59bd59a503c2ea772fd8c09a7a23b`. **Iteration 13 complete.** Reviews 14–15 remain scheduled.
+
+### Iteration 14 — reference UI and responsive regression review (2026-11-04)
+
+- Read the entire log and verified review 13's completion before this pass.
+- Reference actually inspected in Chrome: Inventory Management at 1920px, implementation code/explanation layout, class-based On This Page hierarchy and verification nesting. Read the visible Warehouse method explanation and compared actual heading typography and navigation with ATM. The reference and ATM both use 33.18px h2/600 and 27.65px h3/500 at desktop scale.
+- Chrome checks on live ATM: 320, 390, 768, 1920, and 2560px layouts have no document overflow. Desktop article stays 708px at both wide sizes; sidebar hides on mobile/tablet. Final Requirements TOC click lands approximately 80px below the top, with smooth scrolling enabled. Tested Java selection and ArrowLeft back to Python in the BankGateway/Hardware language panel. Requirements/clarification content wraps at mobile width. Reset temporary viewport overrides.
+- Findings: no new UI defect justified a change. Preserved the existing shell, controls, class-based TOC, requirement panel, language tabs and deliberate omission of the reference course sidebar. This is a verified regression pass, not a claim of pixel-perfect equivalence to the reference's full site.
+- Validation: regenerated both HTML aliases and Markdown without content differences. Rendered Python/source AST and 23 Python tests pass; Java scenarios including 540 allocation cases and concurrency pass. All 11 language pairs, IDs, links and verification nesting pass. No article, CSS, JavaScript, implementation, or Splitwise changes were needed.
+- Publication: this review updates the log only. Current article deployment verification follows below.
