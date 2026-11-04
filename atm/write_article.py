@@ -331,6 +331,23 @@ As a successful search returns, each level adds its chosen notes to that map. Th
 
 The `failed` set remembers combinations of index and remaining amount that could not work. For example, after proving that the smaller notes cannot make ₹100, another path does not need to repeat that search. This cache belongs to one planning call because stock may change before the next withdrawal.
 
+Why is the cache key just `(index, remaining)`? Earlier choices used only larger denominations. They did not change the stock of any denomination still ahead of us. The same index and remainder therefore describe the same remaining problem within this call.
+
+Walk through our ₹600 example before reading the code:
+
+```text
+Available: one ₹500 note, three ₹200 notes
+Need: ₹600
+
+Try one ₹500 note -> ₹100 remains
+  ₹200 cannot fit -> no bundle
+Try zero ₹500 notes -> ₹600 remains
+  Try three ₹200 notes -> ₹0 remains -> success
+Return {20000: 3} in paise. Stock is still unchanged.
+```
+
+Trying zero is essential. Without that choice, the search would never discover a bundle made entirely from smaller notes.
+
 This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.
 
 '''
@@ -390,6 +407,8 @@ article += '''
 **Withdrawing cash**
 
 This is the core operation. We need both a valid cash bundle and reserved bank funds before asking the dispenser to move money.
+
+Plan the notes first. If the machine cannot make the amount, there is no reason to reserve the customer's funds. Keep the same ATM lock until withdrawal finishes so another call cannot use those notes between planning and delivery. We do not reserve notes in a second data structure because no other operation can change this inventory while the lock is held.
 
 **Core logic:**
 

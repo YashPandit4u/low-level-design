@@ -140,6 +140,25 @@ class ATMTest(unittest.TestCase):
         self.assertEqual(self.hardware.dispensed, [])
         self.assertEqual(self.atm.cash_snapshot()[20000], 3)
 
+    def test_shortage_and_decline_leave_notes_for_later_withdrawal(self):
+        self.atm = ATM(self.bank, self.hardware, {50000: 1, 20000: 3}, 200000)
+        self.login()
+        for amount in [10000, 120000]:  # No exact bundle; then insufficient total cash.
+            self.assertEqual(self.atm.withdraw(amount), 'CASH_UNAVAILABLE')
+        self.assertEqual(self.bank.calls, [])
+        self.bank.funds = 10000
+        self.assertEqual(self.atm.withdraw(60000), 'DECLINED')
+        self.assertEqual(self.hardware.dispensed, [])
+        self.assertEqual(self.atm.cash_snapshot(), {50000: 1, 20000: 3})
+        self.assertEqual(self.atm.status(), ('READY', None))
+        self.bank.funds = 100000
+        self.assertEqual(self.atm.withdraw(60000), 'SUCCESS')
+        self.assertEqual(self.atm.withdraw(60000), 'CASH_UNAVAILABLE')
+        self.assertEqual(self.hardware.dispensed, [{20000: 3}])
+        self.assertEqual(self.bank.calls, ['hold', 'hold', 'capture'])
+        self.assertEqual(self.atm.cash_snapshot(), {50000: 1, 20000: 0})
+        self.assertEqual(self.atm.status(), ('READY', None))
+
     def test_no_cash_releases_hold(self):
         self.login()
         self.hardware.outcome = 'NONE'

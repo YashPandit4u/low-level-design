@@ -99,7 +99,28 @@ public final class ATMTest {
         check(atm.pendingOperation() == null);
     }
 
+    static void shortageThenSuccess() {
+        Bank bank = new Bank(); Device device = new Device();
+        ATM atm = new ATM(bank, device, Map.of(50000L, 1, 20000L, 3), 200000);
+        atm.insertCard("card-A"); check(atm.enterPin("1234"));
+        check(atm.withdraw(10000).equals("CASH_UNAVAILABLE"));
+        check(atm.withdraw(120000).equals("CASH_UNAVAILABLE"));
+        check(bank.holds.isEmpty() && device.calls == 0);
+        bank.funds = 10000;
+        check(atm.withdraw(60000).equals("DECLINED"));
+        check(atm.cashSnapshot().equals(Map.of(50000L, 1, 20000L, 3)));
+        check(atm.state().equals("READY") && atm.pendingOperation() == null);
+        check(device.calls == 0);
+        bank.funds = 100000;
+        check(atm.withdraw(60000).equals("SUCCESS"));
+        check(atm.withdraw(60000).equals("CASH_UNAVAILABLE"));
+        check(bank.funds == 40000 && bank.holds.isEmpty() && device.calls == 1);
+        check(atm.cashSnapshot().equals(Map.of(50000L, 1, 20000L, 0)));
+        check(atm.state().equals("READY") && atm.pendingOperation() == null);
+    }
+
     public static void main(String[] args) throws Exception {
+        shortageThenSuccess();
         sessionTransitions();
         Bank bank = new Bank(); Device device = new Device();
         ATM atm = ready(bank, device);

@@ -462,6 +462,18 @@ Out of scope:
 <p><code>plan</code> sorts the denominations and starts the search. Its helper, <code>find_bundle</code>, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed returns <code>None</code> in Python or <code>null</code> in Java.</p>
 <p>As a successful search returns, each level adds its chosen notes to that map. The code checks <code>is not None</code>, rather than whether the map is nonempty, because an empty map is a valid success at the end of the search.</p>
 <p>The <code>failed</code> set remembers combinations of index and remaining amount that could not work. For example, after proving that the smaller notes cannot make ₹100, another path does not need to repeat that search. This cache belongs to one planning call because stock may change before the next withdrawal.</p>
+<p>Why is the cache key just <code>(index, remaining)</code>? Earlier choices used only larger denominations. They did not change the stock of any denomination still ahead of us. The same index and remainder therefore describe the same remaining problem within this call.</p>
+<p>Walk through our ₹600 example before reading the code:</p>
+<div class="codebox"><div class="codebar"><span class="code-title">Good Solution: Build a dynamic programming table</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Available: one ₹500 note, three ₹200 notes
+Need: ₹600
+
+Try one ₹500 note -&gt; ₹100 remains
+  ₹200 cannot fit -&gt; no bundle
+Try zero ₹500 notes -&gt; ₹600 remains
+  Try three ₹200 notes -&gt; ₹0 remains -&gt; success
+Return {20000: 3} in paise. Stock is still unchanged.
+</code></pre></div>
+<p>Trying zero is essential. Without that choice, the search would never discover a bundle made entirely from smaller notes.</p>
 <p>This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.</p>
 <div class="codebox language-pair" data-code="code-3"><div class="codebar"><div aria-label="CashInventory language" role="tablist"><button aria-controls="code-3-python" aria-selected="true" data-lang="python" id="code-3-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-3-java" aria-selected="false" data-lang="java" id="code-3-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-3-python-tab" id="code-3-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">amount</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
     <span class="c1"># The ATM has already validated the amount. Planning changes no stock.</span>
@@ -667,6 +679,7 @@ Out of scope:
 
 <p><strong>Withdrawing cash</strong></p>
 <p>This is the core operation. We need both a valid cash bundle and reserved bank funds before asking the dispenser to move money.</p>
+<p>Plan the notes first. If the machine cannot make the amount, there is no reason to reserve the customer's funds. Keep the same ATM lock until withdrawal finishes so another call cannot use those notes between planning and delivery. We do not reserve notes in a second data structure because no other operation can change this inventory while the lock is held.</p>
 <p><strong>Core logic:</strong></p>
 <ol>
 <li>Check the session and amount.</li>

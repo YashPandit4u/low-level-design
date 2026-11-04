@@ -118,3 +118,12 @@ Results are recorded below in execution order. Each entry identifies its assigne
 - Publication: article commit contains this entry. Deployment verification follows below.
 
 - Deployment verified: commit `f25eb389a403fce3bf9a8c42ed5216ab28ed0b93`; [Pages run 41777107279](https://github.com/YashPandit4u/low-level-design/actions/runs/41777107279) succeeded. Live `/atm/` matches tested HTML byte for byte, SHA-256 `2732fd48b54b1a42c85bbde45e588507db0f123dbdfc92c2e25569d5b68ec024`. **Iteration 5 complete.** Seven reviews complete (1, 2, 3, 4, 5, 8, 10). Reviews 6, 7, 9 remain scheduled.
+
+### Iteration 6 — allocation and withdrawal explanations (2026-11-04, recovery pass)
+
+- Read the full log and preceding session review. Preserved completed scope, session, UI, and failure-handling changes.
+- Reference actually read in Chrome: Connect Four's Implementation introduction, Game/makeMove, Board/placeDisc/checkWin, algorithm alternatives, and Verification trace. Inspected the implementation screenshot. Used its sequence of explanation, edge cases, code, and concrete tracing as the delivery reference.
+- Concrete gaps: the bounded search was described but not traced before code. The reason `(index, remaining)` is sufficient for caching was implicit. Planning before a bank hold and keeping a plan valid until delivery needed a clearer explanation. Existing exhaustive planner tests did not replace an end-to-end sequence of shortages, bank decline, successful withdrawal, and depleted-stock rejection.
+- Changes: added a short ₹600 search trace showing the failed ₹500 branch and the essential zero-count choice; explained unchanged smaller-denomination stock and per-call caching; explained why planning precedes holds and why one ATM lock avoids a separate note reservation structure. Added matching Python/Java sequential shortage/decline/success/depletion scenarios. No algorithm or UI change was necessary.
+- Validation: rebuilt Markdown and both HTML aliases. Rendered Python matches source AST and passes 19 tests. Rendered Java passes its scenarios. Both retain 540 exhaustive allocation cases. All 11 language pairs, IDs, links, and verification nesting pass. Splitwise unchanged.
+- Publication: article commit contains this entry. Deployment verification follows below.
