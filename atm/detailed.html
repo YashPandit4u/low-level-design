@@ -83,35 +83,60 @@ article{padding-right:0;overflow-wrap:break-word}
 <p class="callout intro"><strong class="callout-title">🏧 What is an ATM?</strong>An ATM lets a customer use a bank account without visiting a teller. The customer inserts a card, enters a PIN, and asks for cash. Our job is to coordinate that session, the bank, and the cash dispenser without losing track of the money.</p>
 <p>The screen makes this look simple. The difficult moment comes after the bank approves a withdrawal. What if the machine cannot dispense the notes? What if it dispenses them but the reply is lost? We'll build the normal flow first, then make those outcomes explicit.</p>
 <h2 id="requirements">Requirements<a aria-label="Link to Requirements" class="heading-anchor" href="#requirements">#</a></h2>
-<p>Start with a small prompt: “Design an ATM that authenticates a customer and lets them check their balance or withdraw cash.” Before choosing classes, establish who owns the account and what happens when cash delivery fails.</p>
+<p>An interviewer might start with:</p>
+<blockquote>
+<p>Design an ATM that authenticates a customer and lets them check their balance or withdraw cash.</p>
+</blockquote>
+<p>That leaves a few decisions open. Which operations belong to our code? Who owns the money? What should the machine do when cash delivery fails? Clarify those before choosing classes.</p>
 <h3 id="clarifying-questions">Clarifying Questions<a aria-label="Link to Clarifying Questions" class="heading-anchor" href="#clarifying-questions">#</a></h3>
 <blockquote class="dialogue">
 <p><strong>You:</strong> Which operations should we support? Do we need deposits and transfers?</p>
 <p><strong>Interviewer:</strong> Support PIN authentication, balance inquiry, cash withdrawal, and cancellation. Leave deposits and transfers out.</p>
-<p><strong>You:</strong> Does the ATM own account balances and PIN verification?</p>
-<p><strong>Interviewer:</strong> No. Use a bank interface. It authenticates the card and owns the account balance. Assume one account per card for this exercise.</p>
-<p><strong>You:</strong> Can the bank reserve funds before we dispense cash?</p>
-<p><strong>Interviewer:</strong> Yes. A successful hold reduces the available balance. We can capture it after delivery or release it when no cash was delivered.</p>
-<p><strong>You:</strong> Which notes are available, and what should happen after a wrong PIN?</p>
-<p><strong>Interviewer:</strong> Note denominations and counts are configured at startup. Reject a withdrawal if no exact bundle is available. Allow three rejected PIN attempts per inserted-card session, then eject the card.</p>
-<p><strong>You:</strong> Are we designing one machine or a fleet? Can requests overlap?</p>
-<p><strong>Interviewer:</strong> One ATM with one active card session. Calls may arrive from different threads, so serialize them. The bank handles account activity from other machines.</p>
-<p><strong>You:</strong> Are we handling real hardware and process crashes?</p>
-<p><strong>Interviewer:</strong> Model the hardware behind an interface. Handle definite and uncertain dispensing results. Keep persistent crash recovery and operator reconciliation as follow-ups.</p>
 </blockquote>
-<p>These answers matter. Without the bank's hold contract, we would need a different withdrawal flow. Without exact-bundle planning, a machine with enough total cash could still approve an amount it cannot dispense.</p>
+<p>This gives us a small customer flow: insert a card, authenticate, then read the balance or withdraw cash.</p>
+<blockquote class="dialogue">
+<p><strong>You:</strong> Does the ATM own account balances and PIN verification?</p>
+<p><strong>Interviewer:</strong> No. The bank authenticates the card and owns the account balance. Assume one account per card for this exercise.</p>
+</blockquote>
+<p>We need a bank interface, not an account-management system. The ATM remembers the account returned by authentication. It does not store PINs or maintain a second account balance.</p>
+<blockquote class="dialogue">
+<p><strong>You:</strong> Can the bank reserve the withdrawal amount before we dispense cash?</p>
+<p><strong>Interviewer:</strong> Yes. It checks available funds and creates a hold in one operation. We can turn that hold into a debit after delivery or release it when no cash was delivered.</p>
+</blockquote>
+<p>A hold makes those funds unavailable to other withdrawals. Reading the balance alone would not reserve them. We'll call the final debit operation <code>capture</code>.</p>
+<blockquote class="dialogue">
+<p><strong>You:</strong> Which currency and notes should we support? Is there a withdrawal limit?</p>
+<p><strong>Interviewer:</strong> Use INR with denomination counts configured at startup. Each request must be within a configured withdrawal limit and payable exactly with the available notes. We do not need to minimize the number of notes.</p>
+</blockquote>
+<p>Use integer paise throughout. For example, ₹600 is <code>60000</code>, and three ₹200 notes are <code>{20000: 3}</code>. Enough total cash does not guarantee that an exact bundle is available.</p>
+<blockquote class="dialogue">
+<p><strong>You:</strong> What happens after a wrong PIN or a completed withdrawal? When do we eject the card?</p>
+<p><strong>Interviewer:</strong> Allow three rejected PIN attempts per inserted-card session, then eject. After a completed or definitely declined withdrawal, keep the authenticated session open. The customer can do another operation or cancel to end the session and eject.</p>
+</blockquote>
+<p>The attempt count belongs to this session. Bank-wide card lockout is separate. Ending the session must also clear the authenticated account so the next customer starts fresh.</p>
+<blockquote class="dialogue">
+<p><strong>You:</strong> Are we designing one machine or a fleet? Can requests overlap?</p>
+<p><strong>Interviewer:</strong> One ATM with one active card session. Calls may arrive from different threads, so serialize them. Cancellation waits for a running withdrawal to finish. The bank handles account activity from other machines.</p>
+</blockquote>
+<p>This lets us use one lock for local session and cash state. It does not replace the bank's protection of shared account funds.</p>
+<blockquote class="dialogue">
+<p><strong>You:</strong> How much hardware failure handling do we need? What about a process crash?</p>
+<p><strong>Interviewer:</strong> Use a hardware interface that reports full delivery, no delivery, or an uncertain result. Stop the ATM on uncertainty or failed card ejection. Leave persistent crash recovery and operator reconciliation for follow-ups.</p>
+</blockquote>
+<p>The distinction matters: a lost reply does not prove that no cash was delivered. We'll keep the unresolved operation ID and stop instead of guessing whether to refund.</p>
 <h3 id="final-requirements">Final Requirements<a aria-label="Link to Final Requirements" class="heading-anchor" href="#final-requirements">#</a></h3>
 <div class="codebox requirements-panel"><div class="codebar"><span class="code-title">Final requirements</span><button aria-label="Copy requirements" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Requirements:
-1. Accept one card session at a time and authenticate it through the bank.
-2. Allow balance inquiry and withdrawal only after authentication.
+1. Serve one ATM with one active card session and one bank account per card. Authenticate through the bank.
+2. Allow available-balance inquiry and withdrawal only after authentication. Keep the session open after a completed or definitely declined withdrawal.
 3. Eject the card after three rejected PIN attempts or when the customer cancels.
-4. Withdraw a positive amount within a configured per-withdrawal limit, using available notes only.
+4. Withdraw a positive amount within the configured per-withdrawal limit. Find an exact bundle from the configured note counts.
 5. Reserve bank funds before dispensing. Capture after confirmed delivery and release only after confirmed non-delivery.
-6. Stop accepting operations when a withdrawal has an uncertain outcome. Keep its operation ID for review.
-7. Serialize operations on one ATM. Use integer paise for all money values.
+6. Stop serving customers after an uncertain withdrawal or failed card ejection. Retain the operation ID for an unresolved withdrawal.
+7. Serialize operations, including cancellation. Use INR and integer paise for all money values.
 
 Out of scope:
-- Deposits and transfers
+- Deposits
+- Transfers
 - Multiple accounts per card
 - Currency conversion
 - Cash refilling during a session
@@ -119,10 +144,11 @@ Out of scope:
 - Persistent storage and crash recovery
 - Automatic retries and reconciliation
 - Bank-wide PIN lockout policy
+- Automatic session expiry
 </code></pre></div>
 
 
-<p>We model successful card ejection as a hardware call. If that call fails, the ATM stops serving customers. We do not pretend a software state change can physically remove a stuck card.</p>
+<p>These requirements define the behavior we will implement. Card ejection remains a hardware operation: clearing session memory cannot physically return a stuck card.</p>
 <h2 id="core-entities-and-relationships">Core Entities and Relationships<a aria-label="Link to Core Entities and Relationships" class="heading-anchor" href="#core-entities-and-relationships">#</a></h2>
 <p>Start with the nouns in the requirements: ATM, session, card, account, bank, notes, and dispenser. Keep a class when it owns changing state, enforces a rule, or represents an external dependency.</p>
 <p>The <strong>ATM</strong> needs to remember the active card and allowed operations. <strong>CashInventory</strong> needs to track note counts and find valid bundles. <strong>BankGateway</strong> and <strong>Hardware</strong> define the operations we need from systems outside that local state.</p>

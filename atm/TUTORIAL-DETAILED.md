@@ -8,7 +8,11 @@ The screen makes this look simple. The difficult moment comes after the bank app
 
 ## Requirements
 
-Start with a small prompt: “Design an ATM that authenticates a customer and lets them check their balance or withdraw cash.” Before choosing classes, establish who owns the account and what happens when cash delivery fails.
+An interviewer might start with:
+
+> Design an ATM that authenticates a customer and lets them check their balance or withdraw cash.
+
+That leaves a few decisions open. Which operations belong to our code? Who owns the money? What should the machine do when cash delivery fails? Clarify those before choosing classes.
 
 ### Clarifying questions
 
@@ -16,41 +20,58 @@ Start with a small prompt: “Design an ATM that authenticates a customer and le
 >
 > **Interviewer:** Support PIN authentication, balance inquiry, cash withdrawal, and cancellation. Leave deposits and transfers out.
 
+This gives us a small customer flow: insert a card, authenticate, then read the balance or withdraw cash.
+
 > **You:** Does the ATM own account balances and PIN verification?
 >
-> **Interviewer:** No. Use a bank interface. It authenticates the card and owns the account balance. Assume one account per card for this exercise.
+> **Interviewer:** No. The bank authenticates the card and owns the account balance. Assume one account per card for this exercise.
 
-> **You:** Can the bank reserve funds before we dispense cash?
->
-> **Interviewer:** Yes. A successful hold reduces the available balance. We can capture it after delivery or release it when no cash was delivered.
+We need a bank interface, not an account-management system. The ATM remembers the account returned by authentication. It does not store PINs or maintain a second account balance.
 
-> **You:** Which notes are available, and what should happen after a wrong PIN?
+> **You:** Can the bank reserve the withdrawal amount before we dispense cash?
 >
-> **Interviewer:** Note denominations and counts are configured at startup. Reject a withdrawal if no exact bundle is available. Allow three rejected PIN attempts per inserted-card session, then eject the card.
+> **Interviewer:** Yes. It checks available funds and creates a hold in one operation. We can turn that hold into a debit after delivery or release it when no cash was delivered.
+
+A hold makes those funds unavailable to other withdrawals. Reading the balance alone would not reserve them. We'll call the final debit operation `capture`.
+
+> **You:** Which currency and notes should we support? Is there a withdrawal limit?
+>
+> **Interviewer:** Use INR with denomination counts configured at startup. Each request must be within a configured withdrawal limit and payable exactly with the available notes. We do not need to minimize the number of notes.
+
+Use integer paise throughout. For example, ₹600 is `60000`, and three ₹200 notes are `{20000: 3}`. Enough total cash does not guarantee that an exact bundle is available.
+
+> **You:** What happens after a wrong PIN or a completed withdrawal? When do we eject the card?
+>
+> **Interviewer:** Allow three rejected PIN attempts per inserted-card session, then eject. After a completed or definitely declined withdrawal, keep the authenticated session open. The customer can do another operation or cancel to end the session and eject.
+
+The attempt count belongs to this session. Bank-wide card lockout is separate. Ending the session must also clear the authenticated account so the next customer starts fresh.
 
 > **You:** Are we designing one machine or a fleet? Can requests overlap?
 >
-> **Interviewer:** One ATM with one active card session. Calls may arrive from different threads, so serialize them. The bank handles account activity from other machines.
+> **Interviewer:** One ATM with one active card session. Calls may arrive from different threads, so serialize them. Cancellation waits for a running withdrawal to finish. The bank handles account activity from other machines.
 
-> **You:** Are we handling real hardware and process crashes?
+This lets us use one lock for local session and cash state. It does not replace the bank's protection of shared account funds.
+
+> **You:** How much hardware failure handling do we need? What about a process crash?
 >
-> **Interviewer:** Model the hardware behind an interface. Handle definite and uncertain dispensing results. Keep persistent crash recovery and operator reconciliation as follow-ups.
+> **Interviewer:** Use a hardware interface that reports full delivery, no delivery, or an uncertain result. Stop the ATM on uncertainty or failed card ejection. Leave persistent crash recovery and operator reconciliation for follow-ups.
 
-These answers matter. Without the bank's hold contract, we would need a different withdrawal flow. Without exact-bundle planning, a machine with enough total cash could still approve an amount it cannot dispense.
+The distinction matters: a lost reply does not prove that no cash was delivered. We'll keep the unresolved operation ID and stop instead of guessing whether to refund.
 
 ### Final requirements
 
-1. Accept one card session at a time and authenticate it through the bank.
-2. Allow balance inquiry and withdrawal only after authentication.
+1. Serve one ATM with one active card session and one bank account per card. Authenticate through the bank.
+2. Allow available-balance inquiry and withdrawal only after authentication. Keep the session open after a completed or definitely declined withdrawal.
 3. Eject the card after three rejected PIN attempts or when the customer cancels.
-4. Withdraw a positive amount within a configured per-withdrawal limit, using available notes only.
+4. Withdraw a positive amount within the configured per-withdrawal limit. Find an exact bundle from the configured note counts.
 5. Reserve bank funds before dispensing. Capture after confirmed delivery and release only after confirmed non-delivery.
-6. Stop accepting operations when a withdrawal has an uncertain outcome. Keep its operation ID for review.
-7. Serialize operations on one ATM. Use integer paise for all money values.
+6. Stop serving customers after an uncertain withdrawal or failed card ejection. Retain the operation ID for an unresolved withdrawal.
+7. Serialize operations, including cancellation. Use INR and integer paise for all money values.
 
 Out of scope:
 
-- Deposits and transfers
+- Deposits
+- Transfers
 - Multiple accounts per card
 - Currency conversion
 - Cash refilling during a session
@@ -58,8 +79,9 @@ Out of scope:
 - Persistent storage and crash recovery
 - Automatic retries and reconciliation
 - Bank-wide PIN lockout policy
+- Automatic session expiry
 
-We model successful card ejection as a hardware call. If that call fails, the ATM stops serving customers. We do not pretend a software state change can physically remove a stuck card.
+These requirements define the behavior we will implement. Card ejection remains a hardware operation: clearing session memory cannot physically return a stuck card.
 
 ## Core entities and relationships
 
