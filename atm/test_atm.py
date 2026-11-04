@@ -1,6 +1,7 @@
 import itertools
 import unittest
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from threading import Event
 from atm import ATM, CashInventory
 
 
@@ -244,6 +245,39 @@ class ATMTest(unittest.TestCase):
             results = list(pool.map(self.atm.withdraw, [20000, 20000]))
         self.assertCountEqual(results, ['SUCCESS', 'CASH_UNAVAILABLE'])
         self.assertEqual(self.bank.funds, 80000)
+
+    def test_cancel_waits_for_dispensing(self):
+        for outcome in ['ALL', 'UNKNOWN']:
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                entered, finish, cancelling = Event(), Event(), Event()
+                def dispense(notes):
+                    entered.set()
+                    if not finish.wait(2): raise AssertionError('Test did not release dispenser')
+                    return outcome
+                self.hardware.dispense = dispense
+                self.login()
+                def cancel():
+                    cancelling.set()
+                    self.atm.cancel()
+                with ThreadPoolExecutor(2) as pool:
+                    withdrawal = pool.submit(self.atm.withdraw, 20000)
+                    try:
+                        self.assertTrue(entered.wait(2))
+                        cancellation = pool.submit(cancel)
+                        self.assertTrue(cancelling.wait(2))
+                        with self.assertRaises(FutureTimeout): cancellation.result(timeout=0.05)
+                        self.assertEqual(self.hardware.ejections, 0)
+                    finally:
+                        finish.set()
+                    self.assertEqual(withdrawal.result(2), 'SUCCESS' if outcome == 'ALL' else 'PENDING_REVIEW')
+                    cancellation.result(2)
+                self.assertEqual(self.hardware.ejections, 1)
+                state, pending = self.atm.status()
+                self.assertEqual(state, 'IDLE' if outcome == 'ALL' else 'OUT_OF_SERVICE')
+                self.assertEqual(pending is None, outcome == 'ALL')
+                self.assertEqual(self.bank.funds, 80000 if outcome == 'ALL' else 100000)
+                self.assertEqual(bool(self.bank.holds), outcome == 'UNKNOWN')
 
     def test_planner_against_exhaustive_small_inventories(self):
         for counts in itertools.product(range(3), repeat=3):

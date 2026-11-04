@@ -119,7 +119,49 @@ public final class ATMTest {
         check(atm.state().equals("READY") && atm.pendingOperation() == null);
     }
 
+    static void cancellationDuringDispensing() throws Exception {
+        for (String deliveryResult : List.of("ALL", "UNKNOWN")) {
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch finish = new CountDownLatch(1);
+            CountDownLatch cancelling = new CountDownLatch(1);
+            Bank bank = new Bank();
+            Device device = new Device() {
+                public String dispense(Map<Long, Integer> notes) {
+                    entered.countDown();
+                    try {
+                        if (!finish.await(2, TimeUnit.SECONDS)) throw new AssertionError();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(e);
+                    }
+                    return deliveryResult;
+                }
+            };
+            ATM atm = ready(bank, device);
+            try (var pool = Executors.newFixedThreadPool(2)) {
+                var withdrawal = pool.submit(() -> atm.withdraw(20000));
+                Future<?> cancellation;
+                try {
+                    check(entered.await(2, TimeUnit.SECONDS));
+                    cancellation = pool.submit(() -> { cancelling.countDown(); atm.cancel(); });
+                    check(cancelling.await(2, TimeUnit.SECONDS));
+                    try { cancellation.get(50, TimeUnit.MILLISECONDS); throw new AssertionError(); }
+                    catch (TimeoutException expected) { }
+                    check(device.ejections == 0);
+                } finally { finish.countDown(); }
+                check(withdrawal.get(2, TimeUnit.SECONDS).equals(deliveryResult.equals("ALL") ? "SUCCESS" : "PENDING_REVIEW"));
+                cancellation.get(2, TimeUnit.SECONDS);
+            }
+            check(device.ejections == 1);
+            check(atm.state().equals(deliveryResult.equals("ALL") ? "IDLE" : "OUT_OF_SERVICE"));
+            check((atm.pendingOperation() == null) == deliveryResult.equals("ALL"));
+            check(bank.funds == (deliveryResult.equals("ALL") ? 80000 : 100000));
+            check(bank.holds.isEmpty() == deliveryResult.equals("ALL"));
+        }
+    }
+
     public static void main(String[] args) throws Exception {
+        cancellationDuringDispensing();
         shortageThenSuccess();
         sessionTransitions();
         Bank bank = new Bank(); Device device = new Device();

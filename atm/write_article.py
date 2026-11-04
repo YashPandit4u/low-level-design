@@ -278,7 +278,7 @@ For the important operations, we'll explain the **Core logic** and **Edge cases*
 
 ### BankGateway and Hardware
 
-Define the contracts first. Authentication returns an account ID or a rejected result. The remaining bank methods use that account ID or the withdrawal's operation ID. The ATM never stores a PIN. The hardware adapter must report uncertainty honestly.
+Define the contracts first. Authentication returns an account ID or a rejected result. The remaining bank methods use that account ID or the withdrawal's operation ID. The ATM never stores a PIN. The hardware adapter must report uncertainty honestly. These adapters make synchronous calls with timeouts and must not call back into ATM while it is holding its lock. A timeout reports an unknown outcome, not proof that the external action stopped.
 
 '''
 article += pair(py_class('BankGateway')+'\n\n'+py_class('Hardware'), java_block('public interface BankGateway')+'\n\n'+java_block('public interface Hardware'))
@@ -444,6 +444,17 @@ Before calling the bank, save the new operation ID in `pending`. If the hold req
 
 The `try` block starts at the first operation that can affect money. Invalid input and an unavailable cash bundle are handled before it. An exception inside the block leaves the operation pending and ends the session. The code does not attempt a refund from the exception handler.
 
+Keep track of what is known at each failure point:
+
+| Where the reply is lost | What we know | What we do |
+| --- | --- | --- |
+| Holding funds | No dispense call was made. The bank may have reserved funds. | Keep the operation ID and stop. |
+| Dispensing | Some, all, or none of the notes may have left. | Keep the hold unresolved and stop. Do not guess a refund. |
+| Capturing funds | All notes were delivered. The debit may already be posted. | Keep the reduced stock and operation ID, then stop. |
+| Releasing funds after NONE | No notes were delivered. The bank may already have released the hold. | Keep stock unchanged and the operation ID, then stop. |
+
+The lock prevents two local operations from overlapping. It cannot undo cash delivery or make the bank and dispenser commit together. That is why we still need PENDING_REVIEW even though every ATM method is synchronized.
+
 Notice that inventory is reduced before capture. Once delivery is confirmed, those notes are gone even if the capture response later times out. For UNKNOWN, the stored counts are only the last confirmed stock. They must not be treated as current stock until maintenance reconciles the machine.
 
 '''
@@ -541,6 +552,8 @@ Reject three PINs            -> IDLE, card ejected once more
 Also cancel while waiting for a PIN. The next inserted card must get a fresh attempt count. If ejection fails instead, expect OUT_OF_SERVICE and reject the next card. Calling cancel again must not retry ejection or bring the ATM online.
 
 Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. A failed balance read should leave the authenticated session open because it changes no money. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.
+
+For cancellation during withdrawal, pause the fake dispenser and start cancellation on another thread. Cancellation must wait without ejecting. After ALL, finish capture and then eject. After UNKNOWN, end out of service and retain the pending ID. The waiting cancellation must not clear it or eject a second time.
 
 The included tests also compare the planner against all combinations of several small inventories. That checks exact amounts, available counts, and planning without mutation instead of only checking one happy path.
 

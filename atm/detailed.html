@@ -367,7 +367,7 @@ Out of scope:
 <p>We'll build the dependencies first, then use them in ATM. Each method shown under a class belongs to that class. The complete files below put the methods and imports together.</p>
 <p>For the important operations, we'll explain the <strong>Core logic</strong> and <strong>Edge cases</strong> before the code. Simple methods get a shorter explanation. The bank and hardware are interfaces because their real implementations are outside this exercise. The tests provide working fakes for both.</p>
 <h3 id="bankgateway-and-hardware">BankGateway and Hardware<a aria-label="Link to BankGateway and Hardware" class="heading-anchor" href="#bankgateway-and-hardware">#</a></h3>
-<p>Define the contracts first. Authentication returns an account ID or a rejected result. The remaining bank methods use that account ID or the withdrawal's operation ID. The ATM never stores a PIN. The hardware adapter must report uncertainty honestly.</p>
+<p>Define the contracts first. Authentication returns an account ID or a rejected result. The remaining bank methods use that account ID or the withdrawal's operation ID. The ATM never stores a PIN. The hardware adapter must report uncertainty honestly. These adapters make synchronous calls with timeouts and must not call back into ATM while it is holding its lock. A timeout reports an unknown outcome, not proof that the external action stopped.</p>
 <div class="codebox language-pair" data-code="code-1"><div class="codebar"><div aria-label="BankGateway and Hardware language" role="tablist"><button aria-controls="code-1-python" aria-selected="true" data-lang="python" id="code-1-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-1-java" aria-selected="false" data-lang="java" id="code-1-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-1-python-tab" id="code-1-python" role="tabpanel" tabindex="0"><code><span class="k">class</span><span class="w"> </span><span class="nc">BankGateway</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">authenticate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">card_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">"""Return an account ID, or None for a rejected card/PIN."""</span>
@@ -706,6 +706,39 @@ Return {20000: 3} in paise. Stock is still unchanged.
 <p><strong>The withdrawal method</strong></p>
 <p>Before calling the bank, save the new operation ID in <code>pending</code>. If the hold request times out, that ID is how we identify the request whose outcome is unknown. Clear it only after a definite decline, a confirmed release, or a confirmed capture.</p>
 <p>The <code>try</code> block starts at the first operation that can affect money. Invalid input and an unavailable cash bundle are handled before it. An exception inside the block leaves the operation pending and ends the session. The code does not attempt a refund from the exception handler.</p>
+<p>Keep track of what is known at each failure point:</p>
+<table>
+<thead>
+<tr>
+<th>Where the reply is lost</th>
+<th>What we know</th>
+<th>What we do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Holding funds</td>
+<td>No dispense call was made. The bank may have reserved funds.</td>
+<td>Keep the operation ID and stop.</td>
+</tr>
+<tr>
+<td>Dispensing</td>
+<td>Some, all, or none of the notes may have left.</td>
+<td>Keep the hold unresolved and stop. Do not guess a refund.</td>
+</tr>
+<tr>
+<td>Capturing funds</td>
+<td>All notes were delivered. The debit may already be posted.</td>
+<td>Keep the reduced stock and operation ID, then stop.</td>
+</tr>
+<tr>
+<td>Releasing funds after NONE</td>
+<td>No notes were delivered. The bank may already have released the hold.</td>
+<td>Keep stock unchanged and the operation ID, then stop.</td>
+</tr>
+</tbody>
+</table>
+<p>The lock prevents two local operations from overlapping. It cannot undo cash delivery or make the bank and dispenser commit together. That is why we still need PENDING_REVIEW even though every ATM method is synchronized.</p>
 <p>Notice that inventory is reduced before capture. Once delivery is confirmed, those notes are gone even if the capture response later times out. For UNKNOWN, the stored counts are only the last confirmed stock. They must not be treated as current stock until maintenance reconciles the machine.</p>
 <div class="codebox language-pair" data-code="code-8"><div class="codebar"><div aria-label="ATM language" role="tablist"><button aria-controls="code-8-python" aria-selected="true" data-lang="python" id="code-8-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-8-java" aria-selected="false" data-lang="java" id="code-8-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-8-python-tab" id="code-8-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">withdraw</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">amount</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">:</span>
@@ -917,6 +950,7 @@ Reject three PINs            -&gt; IDLE, card ejected once more
 </code></pre></div>
 <p>Also cancel while waiting for a PIN. The next inserted card must get a fresh attempt count. If ejection fails instead, expect OUT_OF_SERVICE and reject the next card. Calling cancel again must not retry ejection or bring the ATM online.</p>
 <p>Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. A failed balance read should leave the authenticated session open because it changes no money. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.</p>
+<p>For cancellation during withdrawal, pause the fake dispenser and start cancellation on another thread. Cancellation must wait without ejecting. After ALL, finish capture and then eject. After UNKNOWN, end out of service and retain the pending ID. The waiting cancellation must not clear it or eject a second time.</p>
 <p>The included tests also compare the planner against all combinations of several small inventories. That checks exact amounts, available counts, and planning without mutation instead of only checking one happy path.</p>
 <p>Run the tests from the repository root:</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Session boundaries and concurrent calls</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>python3<span class="w"> </span>-m<span class="w"> </span>unittest<span class="w"> </span>discover<span class="w"> </span>-s<span class="w"> </span>atm<span class="w"> </span>-v

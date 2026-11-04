@@ -129,3 +129,12 @@ Results are recorded below in execution order. Each entry identifies its assigne
 - Publication: article commit contains this entry. Deployment verification follows below.
 
 - Deployment verified: commit `7afebef71d2dd849c6d26e8f3190d1b4ad43bfa3`; [Pages run 41777603758](https://github.com/YashPandit4u/low-level-design/actions/runs/41777603758) succeeded. Live `/atm/` matches tested HTML byte for byte, SHA-256 `3a76117aebf161523ab32647bce7d588164d293ed2fa779f4afda0590770a380`. **Iteration 6 complete.** Eight reviews complete (1, 2, 3, 4, 5, 6, 8, 10). Reviews 7 and 9 remain scheduled.
+
+### Iteration 7 — failures and concurrency (2026-11-04, recovery pass)
+
+- Read the entire log and reviewed iteration 6's completed withdrawal/allocation changes. Preserved existing implementations and scope.
+- Reference actually read in Chrome: Inventory Management's implementation introduction, transfer core logic/edge cases and atomicity discussion, Warehouse synchronization choices, callback placement, and synchronized reads. Inspected the actual implementation UI. Used its explanation of a concrete race and the limits of a chosen lock rather than introducing new concurrency layers.
+- Concrete gaps: different lost-reply situations were compressed into a generic pending-operation explanation. Local serialization could be mistaken for atomic bank-plus-hardware execution. Synchronous adapter timeout and callback assumptions were implicit. Tests covered concurrent withdrawals but not cancellation queued behind dispensing.
+- Changes: added a compact failure-point table explaining known cash/bank facts and conservative actions; clarified local locking versus external side effects and synchronous adapter requirements. Added event/latch-controlled Python/Java tests that pause dispensing, queue cancellation, verify no early ejection, and check final state after ALL and UNKNOWN. Added the matching verification explanation. No production logic or UI changes.
+- Validation: rendered Python matches source AST and passes 20 tests. Rendered Java passes all scenarios, including concurrent cancellation and 540 allocation cases. Fixed a shadowed outcome variable in the new Java test fake after its first run correctly failed. Rebuilt both pages; all 11 tab pairs, IDs, links, and verification nesting pass. Splitwise unchanged.
+- Publication: article commit contains this entry. Deployment verification follows below.
