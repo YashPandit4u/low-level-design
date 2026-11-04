@@ -1,4 +1,4 @@
-# ATM article: ten separate iterations
+# ATM article: fifteen separate reviews
 
 Repository: /Users/yashpandit/studies/switch/low-level-design
 Publish: https://yashpandit4u.github.io/low-level-design/atm/
@@ -37,6 +37,16 @@ Choose a concrete interview scope: card/session/PIN flow, balance inquiry, withd
 8. Compare UI and navigation against reference, inspect mobile/wide layouts and both language tabs. Fix gaps without adding novel UI.
 9. Audit prose throughout, remove dense phrasing, duplicated validation and needless abstractions. Recheck complete code and article consistency.
 10. Final independent end-to-end comparison, fix remaining justified gaps, run meaningful verification, publish and confirm live endpoint.
+
+## Additional reviews requested after the first ten
+
+11. Teaching flow, requirements, class design, and clarity without losing depth.
+12. Python/Java parity, public boundaries, complete methods, and meaningful edge cases.
+13. Withdrawal invariants, failure semantics, session isolation, concurrency, and recovery limits.
+14. Reference UI comparison across mobile/wide layouts, tabs, navigation, requirements, and TOC.
+15. Final holistic review after reviews 11–14, including tests and verified deployment.
+
+These five reviews are separate scheduled prompts. Each waits for the preceding review to be complete and removes its automation after verified completion.
 
 ## Iteration results
 
@@ -151,3 +161,12 @@ Results are recorded below in execution order. Each entry identifies its assigne
 - Publication: article commit contains this entry. Final deployment verification and overall completion follow below.
 
 - Deployment verified: commit `4097648270db58e3914841a84deb3f8645125254`; [Pages run 41778642337](https://github.com/YashPandit4u/low-level-design/actions/runs/41778642337) succeeded. Live `/atm/` matches tested HTML byte for byte, SHA-256 `14438d08c94c7af4b81262cbea246bcc61568820381d43478a3f40f1ee0da633`. **Iteration 9 complete. All ten numbered reviews are now complete**, each recorded in its own scheduled turn with reference inspection and deployment verification. The final recovery automation is removed after this verification.
+
+### Iteration 11 — teaching flow and class-design transition (2026-11-04)
+
+- Read all ten completed results and carried forward their requirements. Added the five newly requested review focuses to this log without rewriting historical completion records.
+- Reference actually read in Chrome: Connect Four's Final Class Design summary and complete sketch, Implementation introduction and method priorities, and Game's core logic/edge cases and method explanation. Inspected the actual page UI. The reference connects the class responsibilities before discussing implementation priorities.
+- Concrete gaps: the ATM walkthrough moved directly from the Hardware contract to a list of classes without summarizing how they cooperate. Its most important methods were scattered across the class list. The statement that every public operation checks state incorrectly included inspection methods.
+- Changes: added a short successful-withdrawal flow at the Implementation transition and identified plan/withdraw as the interview priorities before the existing class list. Kept complete session methods and failure details. Clarified that inspection remains available in every state. No new headings, classes, helpers, code behavior, or UI elements.
+- Validation: rebuilt Markdown and both HTML aliases. Exact rendered Python/source AST match, 20 Python tests, Java scenarios, 540 allocation cases per language, concurrent cancellation, all 11 tab pairs, links, IDs, and verification nesting pass. Splitwise unchanged.
+- Publication: article commit contains this entry. Deployment verification follows below.

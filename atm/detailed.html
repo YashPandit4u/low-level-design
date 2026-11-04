@@ -325,7 +325,7 @@ Out of scope:
 <p>Do we need the State pattern?</p>
 <details class="comparison neutral"><summary><span class="comparison-title">Good Solution: One class per state</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>A State interface can make sense when each state handles many operations differently. It also allows states to be tested separately. Here it would spread a few short state checks across several classes without making withdrawal easier to follow.</p></div></details>
 
-<details class="comparison good"><summary><span class="comparison-title">Great Solution: Explicit state checks in ATM</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>For four states and a small set of operations, direct checks are easy to review. Every public operation checks whether it is allowed before doing work. We'll use this approach. If the state behavior grows, we can introduce state classes later.</p></div></details>
+<details class="comparison good"><summary><span class="comparison-title">Great Solution: Explicit state checks in ATM</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>For four states and a small set of operations, direct checks are easy to review. Card entry, PIN entry, balance inquiry, and withdrawal check the current state before doing work. Inspection methods remain available in every state. We'll use this approach. If the state behavior grows, we can introduce state classes later.</p></div></details>
 
 <p><strong>Our choice</strong></p>
 <p>Use strings for this walkthrough. The transitions are the important part, not an enum or a hierarchy. Only ATM methods change the state. Callers cannot set it directly.</p>
@@ -358,11 +358,13 @@ Out of scope:
 </code></pre></div>
 <p>The dispenser reports <code>ALL</code> only when the exact bundle reached the customer. <code>NONE</code> means no cash was delivered. <code>UNKNOWN</code> covers uncertainty and partial delivery. A timeout is also uncertain. Those meanings must come from the hardware adapter, not from guessing based on an exception message.</p>
 <h2 id="implementation">Implementation<a aria-label="Link to Implementation" class="heading-anchor" href="#implementation">#</a></h2>
-<p>We have four classes, but they do not all need the same amount of implementation work:</p>
+<p>We now have the pieces for one withdrawal. ATM asks CashInventory for a bundle, BankGateway for a hold, and Hardware to deliver the notes. Once delivery is confirmed, ATM updates CashInventory and asks BankGateway to capture the hold. Neither the inventory nor the dispenser decides whether the customer is authenticated. That check stays in ATM.</p>
+<p>The two methods worth spending most of our interview time on are <code>CashInventory.plan</code> and <code>ATM.withdraw</code>. The first chooses notes without changing stock. The second coordinates the bank and dispenser, including failures. We will also show the complete session methods so the flow from inserting a card to ejecting it is clear.</p>
+<p>Here is what we will implement:</p>
 <ul>
 <li><strong>BankGateway and Hardware:</strong> define their contracts. Real bank communication and device drivers stay outside this exercise.</li>
 <li><strong>CashInventory:</strong> implement <code>plan</code> in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.</li>
-<li><strong>ATM:</strong> implement the session methods, then spend most of our time on <code>withdraw</code>. This is where bank funds and physical cash must agree.</li>
+<li><strong>ATM:</strong> implement card entry, PIN checks, balance inquiry, withdrawal, and cancellation.</li>
 </ul>
 <p>We'll build the dependencies first, then use them in ATM. Each method shown under a class belongs to that class. The complete files below put the methods and imports together.</p>
 <p>For important operations, we'll explain the <strong>Core logic</strong> and <strong>Edge cases</strong> before the code. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.</p>

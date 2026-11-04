@@ -184,7 +184,7 @@ A State interface can make sense when each state handles many operations differe
 
 #### Great Solution: Explicit state checks in ATM
 
-For four states and a small set of operations, direct checks are easy to review. Every public operation checks whether it is allowed before doing work. We'll use this approach. If the state behavior grows, we can introduce state classes later.
+For four states and a small set of operations, direct checks are easy to review. Card entry, PIN entry, balance inquiry, and withdrawal check the current state before doing work. Inspection methods remain available in every state. We'll use this approach. If the state behavior grows, we can introduce state classes later.
 
 **Our choice**
 
@@ -236,11 +236,15 @@ The dispenser reports `ALL` only when the exact bundle reached the customer. `NO
 
 ## Implementation
 
-We have four classes, but they do not all need the same amount of implementation work:
+We now have the pieces for one withdrawal. ATM asks CashInventory for a bundle, BankGateway for a hold, and Hardware to deliver the notes. Once delivery is confirmed, ATM updates CashInventory and asks BankGateway to capture the hold. Neither the inventory nor the dispenser decides whether the customer is authenticated. That check stays in ATM.
+
+The two methods worth spending most of our interview time on are `CashInventory.plan` and `ATM.withdraw`. The first chooses notes without changing stock. The second coordinates the bank and dispenser, including failures. We will also show the complete session methods so the flow from inserting a card to ejecting it is clear.
+
+Here is what we will implement:
 
 - **BankGateway and Hardware:** define their contracts. Real bank communication and device drivers stay outside this exercise.
 - **CashInventory:** implement `plan` in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.
-- **ATM:** implement the session methods, then spend most of our time on `withdraw`. This is where bank funds and physical cash must agree.
+- **ATM:** implement card entry, PIN checks, balance inquiry, withdrawal, and cancellation.
 
 We'll build the dependencies first, then use them in ATM. Each method shown under a class belongs to that class. The complete files below put the methods and imports together.
 
