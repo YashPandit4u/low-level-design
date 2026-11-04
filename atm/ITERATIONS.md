@@ -140,3 +140,12 @@ Results are recorded below in execution order. Each entry identifies its assigne
 - Publication: article commit contains this entry. Deployment verification follows below.
 
 - Deployment verified: commit `55435235de7b89239a298404a5ec4d4311a72d62`; [Pages run 41778172829](https://github.com/YashPandit4u/low-level-design/actions/runs/41778172829) succeeded. Live `/atm/` matches tested HTML byte for byte, SHA-256 `e958ce4d5ce1a0efb00b539f441550ff99d3315c55e78837048c66478353d40f`. **Iteration 7 complete.** Nine reviews complete (1, 2, 3, 4, 5, 6, 7, 8, 10). Review 9 remains scheduled.
+
+### Iteration 9 — plain language and unnecessary complexity (2026-11-04, recovery pass)
+
+- Read the full checklist and all preceding reviews, including iteration 7's failure table and cancellation tests. This is the final missing numbered review, not a rerun of iteration 10.
+- Reference actually read in Chrome: Connect Four's implementation introduction, Game method explanation and alternatives, Board placement and win-checking explanations, and guidance for simple Player methods. Inspected the actual reference page UI. Compared its concrete method-first explanations with dense or repetitive ATM prose.
+- Concrete gaps: repeated session cleanup and interface explanations slowed the walkthrough. Terms such as guards, mutation, durable journal reference, deduplication, and reconciliation appeared where direct descriptions would teach more clearly. One state sentence joined two independent statements with a comma.
+- Changes: simplified 19 prose passages across requirements, entities, class choices, implementation, verification, follow-ups, and interview expectations. Explained persistent records, repeated IDs, checking bank/dispenser records, and note-count updates in plain language. Removed repeated session assertions already covered by the trace. Kept complete methods, typed fields, useful helpers, core/edge explanations, failure table, and original UI. Code already validates common inputs at their owning boundaries; no additional abstraction or behavior changes were needed.
+- Validation: regenerated Markdown and both HTML aliases. Exact rendered Python/source AST match and all 20 Python tests pass. Rendered Java compiles and passes scenarios, including concurrent cancellation and 540 allocation cases. All 11 tab pairs, local links, unique IDs, and verification nesting pass. No Splitwise changes.
+- Publication: article commit contains this entry. Final deployment verification and overall completion follow below.

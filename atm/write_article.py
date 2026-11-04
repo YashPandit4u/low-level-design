@@ -111,7 +111,7 @@ Out of scope:
 - Bank-wide PIN lockout policy
 - Automatic session expiry
 
-These requirements define the behavior we will implement. Card ejection remains a hardware operation: clearing session memory cannot physically return a stuck card.
+Clearing session memory cannot return a stuck card. We still need the hardware to confirm ejection.
 
 ## Core entities and relationships
 
@@ -119,7 +119,7 @@ Start with the nouns in the requirements: ATM, session, card, account, bank, not
 
 The **ATM** needs to remember the active card and allowed operations. **CashInventory** needs to track note counts and find valid bundles. **BankGateway** and **Hardware** define the operations we need from systems outside that local state.
 
-A session is just a few fields on this one ATM. It does not need its own class yet. We would reconsider that if sessions had a separate lifecycle or were stored independently.
+For one ATM, the session can stay as fields on ATM. A separate Session class becomes useful if we later need to store and manage sessions independently.
 
 | Entity | Responsibility |
 | --- | --- |
@@ -210,7 +210,7 @@ Do we need the State pattern?
 
 #### Good Solution: One class per state
 
-A State interface can make sense when each state handles many operations differently. It also allows states to be tested separately. Here it would spread four short guards over several classes without making the withdrawal flow easier to follow.
+A State interface can make sense when each state handles many operations differently. It also allows states to be tested separately. Here it would spread a few short state checks across several classes without making withdrawal easier to follow.
 
 #### Great Solution: Explicit state checks in ATM
 
@@ -218,7 +218,7 @@ For four states and a small set of operations, direct checks are easy to review.
 
 **Our choice**
 
-Use strings for this walkthrough. The transitions are the important part, not an enum or a hierarchy. Public methods change the state, callers cannot set it directly.
+Use strings for this walkthrough. The transitions are the important part, not an enum or a hierarchy. Only ATM methods change the state. Callers cannot set it directly.
 
 ### BankGateway
 
@@ -250,7 +250,7 @@ CashInventory                         // internal to ATM
   + snapshot() -> Map<long, int>
 ```
 
-The ATM owns this object and serializes access to it. The constructor copies the initial stock. A snapshot returns a copy, so changing either map cannot change the machine's stock.
+ATM owns this object and allows only one operation to use it at a time. The constructor copies the initial stock. A snapshot returns a copy, so changing either map cannot change the machine's stock.
 
 `plan` returns a separate map, such as `{20000: 3}` for three ₹200 notes. A missing plan means the amount cannot be made. Only ATM passes a successful plan to `recordDispensed`, while still holding its lock. Neither the customer nor the hardware adapter can edit the stored inventory.
 
@@ -274,11 +274,11 @@ We have four classes, but they do not all need the same amount of implementation
 
 We'll build the dependencies first, then use them in ATM. Each method shown under a class belongs to that class. The complete files below put the methods and imports together.
 
-For the important operations, we'll explain the **Core logic** and **Edge cases** before the code. Simple methods get a shorter explanation. The bank and hardware are interfaces because their real implementations are outside this exercise. The tests provide working fakes for both.
+For important operations, we'll explain the **Core logic** and **Edge cases** before the code. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.
 
 ### BankGateway and Hardware
 
-Define the contracts first. Authentication returns an account ID or a rejected result. The remaining bank methods use that account ID or the withdrawal's operation ID. The ATM never stores a PIN. The hardware adapter must report uncertainty honestly. These adapters make synchronous calls with timeouts and must not call back into ATM while it is holding its lock. A timeout reports an unknown outcome, not proof that the external action stopped.
+These interfaces define what ATM can ask the bank and hardware to do. Each call waits for a result or times out. The adapters must not call ATM methods while ATM is waiting for them, because it still holds the lock. A timeout does not prove that the external action stopped.
 
 '''
 article += pair(py_class('BankGateway')+'\n\n'+py_class('Hardware'), java_block('public interface BankGateway')+'\n\n'+java_block('public interface Hardware'))
@@ -301,11 +301,11 @@ Greedy selection is short, but it rejects that valid ₹600 withdrawal. Checking
 
 #### Great Solution: Try bounded combinations
 
-Try the largest useful count of a denomination, then smaller counts if the remaining amount cannot be made. Each denomination has a fixed stock limit. Remember failed subproblems so we do not solve the same remainder repeatedly. This is a clear fit for a small, configured set of cassettes and a capped withdrawal amount.
+Try the largest useful count of a denomination, then smaller counts if the remaining amount cannot be made. Each denomination has a fixed stock limit. Remember failed searches so we do not repeat them. This works well for a small set of note denominations and a limited withdrawal amount.
 
 #### Good Solution: Build a dynamic programming table
 
-A table can record which amounts are reachable and reconstruct a bundle. It is useful when we want predictable bounds over a modest amount range. It also introduces more bookkeeping, particularly when note counts are limited. We do not need it for this walkthrough.
+A table can record which amounts are reachable and reconstruct a bundle. This can work well when the range of possible amounts is small. We also need to track how many notes of each denomination are available. We do not need it for this walkthrough.
 
 **Implementing `plan`**
 
@@ -392,7 +392,7 @@ article += '''
 - Bank authentication fails with an exception: end the session and take the ATM out of service.
 - Repeated PIN submissions after success: reject them because the ATM is already READY.
 
-The three-attempt counter is local to one session. It does not prevent someone from trying another ATM or reinserting a card. Bank-wide lockout is a separate bank responsibility.
+Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.
 
 '''
 article += pair(py_methods(['insert_card','enter_pin']),java_block('public synchronized void insertCard')+'\n\n'+java_block('public synchronized boolean enterPin'))
@@ -436,7 +436,7 @@ A timeout may happen after cash was delivered. Refunding in that case gives the 
 
 #### Great Solution: Resolve known outcomes and stop on uncertainty
 
-Capture after confirmed delivery. Release after confirmed non-delivery. For everything else, keep the bank operation unresolved and stop accepting new sessions until it can be reconciled. This avoids guessing whether physical cash moved.
+Capture after confirmed delivery. Release after confirmed non-delivery. If the outcome is unknown, stop accepting customers until the bank and dispenser records have been checked.
 
 **The withdrawal method**
 
@@ -475,7 +475,7 @@ article += '''
 
 `status` returns the current state and pending operation ID together in Python. Java exposes them through `state` and `pendingOperation`. These are reads, so none of them clears the pending ID.
 
-`cash_snapshot` delegates to the inventory's copying method. All these reads take the same lock as writes. A pending ID is a clue for reconciliation, not permission to refund or restart the machine.
+`cash_snapshot` delegates to the inventory's copying method. All these reads take the same lock as writes. The pending ID identifies the withdrawal to investigate. It does not tell us whether a refund is safe.
 
 '''
 article += pair(py_methods(['status','cash_snapshot']),java_block('public synchronized String state')+'\n\n'+java_block('public synchronized String pendingOperation')+'\n\n'+java_block('public synchronized Map<Long, Integer> cashSnapshot'))
@@ -551,7 +551,7 @@ Reject three PINs            -> IDLE, card ejected once more
 
 Also cancel while waiting for a PIN. The next inserted card must get a fresh attempt count. If ejection fails instead, expect OUT_OF_SERVICE and reject the next card. Calling cancel again must not retry ejection or bring the ATM online.
 
-Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. A failed balance read should leave the authenticated session open because it changes no money. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.
+A failed balance read should leave the authenticated session open because it changes no money. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.
 
 For cancellation during withdrawal, pause the fake dispenser and start cancellation on another thread. Cancellation must wait without ejecting. After ALL, finish capture and then eject. After UNKNOWN, end out of service and retain the pending ID. The waiting cancellation must not clear it or eject a second time.
 
@@ -577,15 +577,15 @@ Download [atm.py](atm.py) or [ATM.java](ATM.java).
 
 **What happens if the process crashes after cash is delivered?**
 
-Our pending ID is only in memory, so this version cannot recover safely from that crash. Persist a withdrawal record before creating the hold. Record each known outcome and retain the hardware's durable journal reference. On restart, reconcile bank and dispenser records before accepting more withdrawals. A database transaction alone cannot roll back cash already handed to a customer.
+Our pending ID is only in memory, so a crash loses it. Save a withdrawal record to persistent storage before creating the hold. Save each confirmed outcome and the ID of the dispenser's stored transaction record. After restarting, compare the bank and dispenser records before accepting more withdrawals. A database rollback cannot take cash back from a customer.
 
 **How would you support retries?**
 
-Give the withdrawal a stable request ID before the first attempt. Store its amount, account, and result. Repeating that ID must return or resume the same operation, not dispense again. The bank and hardware adapters need compatible deduplication or status-query support. Generating a new UUID for each retry does not provide idempotency.
+Give the withdrawal a stable request ID before the first attempt. Store its amount, account, and result. Repeating that ID must return or resume the same operation, not dispense again. The bank and hardware must recognize repeated IDs or let us check an earlier result. That is what makes a retry safe. Giving every retry a new ID would make it look like another withdrawal.
 
 **What if only some notes were delivered?**
 
-Treat that as UNKNOWN in the current interface. A richer adapter can report the exact delivered bundle when the hardware can prove it. Reconciliation then settles the delivered amount and corrects inventory. Do not release the whole hold merely because the requested bundle was incomplete.
+Treat that as UNKNOWN in the current interface. A richer adapter can report the exact delivered bundle when the hardware can prove it. After checking those records, settle only the amount delivered and correct the note counts. Do not release the whole hold merely because the requested bundle was incomplete.
 
 **Can we avoid holding a lock during bank calls?**
 
@@ -593,7 +593,7 @@ Yes, but we need an explicit in-progress operation and rules for what other requ
 
 **How would cash refilling work?**
 
-Only allow it in a maintenance state with no unresolved withdrawal. Reconcile physical counts, then replace the configured inventory under the ATM lock. An operator should not simply switch OUT_OF_SERVICE to IDLE while an uncertain hold or dispensing result remains.
+Only allow it in a maintenance state with no unresolved withdrawal. Check the physical note counts, then update the inventory under the ATM lock. An operator should not simply switch OUT_OF_SERVICE to IDLE while an uncertain hold or dispensing result remains.
 
 **What would change without bank holds?**
 
@@ -603,7 +603,7 @@ The bank adapter might instead offer a debit with a reversal reference. The same
 
 For an early-career interview, aim for clear ownership, valid session transitions, and a complete withdrawal that checks bank funds and note availability. Explain your assumptions about failures rather than skipping them.
 
-For a mid-level interview, show the exact-bundle problem, separate planning from mutation, and explain why a bank reservation is different from reading a balance. Walk through definite failures and uncertainty with concrete examples.
+For a mid-level interview, show the exact-bundle problem, separate choosing notes from reducing stock, and explain why a bank reservation is different from reading a balance. Walk through definite failures and uncertainty with concrete examples.
 
 For a senior interview, discuss crash recovery, duplicate requests, partial delivery, and the bank/hardware contract. Keep those extensions connected to specific failure scenarios. Adding more patterns or classes is not a substitute for knowing what happens to the customer's money.
 
@@ -613,7 +613,7 @@ For a senior interview, discuss crash recovery, duplicate requests, partial deli
 - Cash was delivered, but capture timed out. Which local data can we update confidently?
 - Why is a rejected hold different from a hold request that throws?
 - Why does cancelling an uncertain withdrawal not release the funds?
-- Which parts of this design must become durable before it can recover from a restart?
+- Which records must survive a restart before this design can recover safely?
 '''
 (ROOT/'TUTORIAL-DETAILED.md').write_text(article)
 print('Wrote', len(article.split()), 'words including code')
