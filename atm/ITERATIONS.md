@@ -170,3 +170,5 @@ Results are recorded below in execution order. Each entry identifies its assigne
 - Changes: added a short successful-withdrawal flow at the Implementation transition and identified plan/withdraw as the interview priorities before the existing class list. Kept complete session methods and failure details. Clarified that inspection remains available in every state. No new headings, classes, helpers, code behavior, or UI elements.
 - Validation: rebuilt Markdown and both HTML aliases. Exact rendered Python/source AST match, 20 Python tests, Java scenarios, 540 allocation cases per language, concurrent cancellation, all 11 tab pairs, links, IDs, and verification nesting pass. Splitwise unchanged.
 - Publication: article commit contains this entry. Deployment verification follows below.
+
+- Deployment verified: commit `7dee8a8ec95c5aa0534a602bbd729bf743fde077`; [Pages run 41782623132](https://github.com/YashPandit4u/low-level-design/actions/runs/41782623132) succeeded. Live `/atm/` matches tested HTML byte for byte, SHA-256 `a6dfcbb3498cc858902ca1145bd92266ad06f05d0c5120a322184845a6ec559a`. **Iteration 11 complete.** Reviews 12–15 remain scheduled.
