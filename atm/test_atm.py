@@ -16,6 +16,7 @@ class FakeBank:
         return 'account-A' if card == 'card-A' and pin == '1234' else None
 
     def available_balance(self, account):
+        if self.fail == 'balance': raise TimeoutError()
         return self.funds - sum(self.holds.values())
 
     def hold(self, account, amount, operation):
@@ -29,11 +30,13 @@ class FakeBank:
         self.calls.append('capture')
         if self.fail == 'capture': raise TimeoutError()
         self.funds -= self.holds.pop(operation)
+        if self.fail == 'capture_after': raise TimeoutError()
 
     def release(self, operation):
         self.calls.append('release')
         if self.fail == 'release': raise TimeoutError()
         del self.holds[operation]
+        if self.fail == 'release_after': raise TimeoutError()
 
 
 class FakeHardware:
@@ -139,6 +142,33 @@ class ATMTest(unittest.TestCase):
                 self.assertEqual(self.atm.status()[0], 'OUT_OF_SERVICE')
                 self.assertIsNotNone(self.atm.status()[1])
                 self.assertEqual(self.atm.cash_snapshot()[20000], 2 if stage == 'capture' else 3)
+
+    def test_bank_reply_lost_after_success(self):
+        for stage in ['capture_after', 'release_after']:
+            with self.subTest(stage=stage):
+                self.setUp()
+                self.login()
+                self.bank.fail = stage
+                self.hardware.outcome = 'ALL' if stage == 'capture_after' else 'NONE'
+                self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
+                state, pending = self.atm.status()
+                self.assertEqual(state, 'OUT_OF_SERVICE')
+                self.assertIsNotNone(pending)
+                self.assertEqual(self.bank.holds, {})
+                delivered = stage == 'capture_after'
+                self.assertEqual(self.bank.funds, 80000 if delivered else 100000)
+                self.assertEqual(self.atm.cash_snapshot()[20000], 2 if delivered else 3)
+                self.assertEqual(self.bank.calls, ['hold', 'capture' if delivered else 'release'])
+                with self.assertRaises(ValueError): self.atm.withdraw(20000)
+
+    def test_balance_outage_does_not_end_session(self):
+        self.login()
+        self.bank.fail = 'balance'
+        with self.assertRaises(TimeoutError): self.atm.balance()
+        self.assertEqual(self.atm.status(), ('READY', None))
+        self.assertEqual(self.hardware.ejections, 0)
+        self.bank.fail = None
+        self.assertEqual(self.atm.balance(), 100000)
 
     def test_eject_failure_disables_machine(self):
         self.login()

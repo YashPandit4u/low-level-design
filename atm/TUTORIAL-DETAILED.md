@@ -798,6 +798,19 @@ Walk through the outcomes before adding more features. Use a fake bank with an a
 
 Start with ₹1,000 in the account and cash stock `{50000: 1, 20000: 3}`. Authenticate, then withdraw `60000` paise. Expect three ₹200 notes, ₹400 remaining in the account, and no active hold. The ₹500 note must remain in the machine.
 
+```text
+Initial: bank balance = 100000 paise, no holds
+         notes = {50000: 1, 20000: 3}
+
+plan(60000) -> {20000: 3}              // inventory unchanged
+hold(account, 60000, operationId)     // available balance becomes 40000
+hardware.dispense({20000: 3}) -> ALL
+recordDispensed({20000: 3})           // notes become {50000: 1, 20000: 0}
+capture(operationId)                 // posted balance becomes 40000, hold removed
+
+Result: SUCCESS, ATM stays READY, pending ID cleared
+```
+
 #### Rejection must not move money
 
 Try withdrawal before authentication, zero, a negative amount, and an amount above the limit. All must fail before a bank hold. Try ₹100 against the same stock: cash planning fails even though total cash is sufficient. Then lower bank funds below a valid bundle's amount: the bank declines and the dispenser is never called.
@@ -812,11 +825,28 @@ Try withdrawal before authentication, zero, a negative amount, and an amount abo
 | ALL but capture times out | Capture outcome unresolved | Remove delivered notes | OUT_OF_SERVICE |
 | NONE but release times out | Release outcome unresolved | Unchanged | OUT_OF_SERVICE |
 
-A fake can throw after creating a hold. That tests why an exception must not be interpreted as a definite decline. Check that the pending operation ID survives and that `cancel` cannot bring the machine back online.
+A fake can throw after creating a hold. That tests why an exception must not be interpreted as a definite decline. Also test capture and release both before and after the bank applies the change. The ATM sees the same timeout in either case.
+
+For example, the customer receives ₹200 and the bank captures the hold, but its reply never arrives:
+
+```text
+Bank before withdrawal: 100000 paise
+hold(20000) succeeds
+Dispenser reports ALL
+ATM removes one 20000-paise note from inventory
+Bank captures the hold: balance = 80000, hold removed
+Capture reply is lost: ATM receives a timeout
+
+ATM result: PENDING_REVIEW
+ATM state: OUT_OF_SERVICE, operation ID retained
+No refund and no second dispensing attempt
+```
+
+The test knows the bank applied the debit because it controls the fake. The ATM does not know that yet. Retaining the ID allows later review to resolve the outcome without moving money again. Check that `cancel` cannot bring the machine back online.
 
 #### Session boundaries and concurrent calls
 
-Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.
+Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. A failed balance read should leave the authenticated session open because it changes no money. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.
 
 The included tests also compare the planner against all combinations of several small inventories. That checks exact amounts, available counts, and planning without mutation instead of only checking one happy path.
 

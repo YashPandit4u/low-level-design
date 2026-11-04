@@ -10,6 +10,7 @@ public final class ATMTest {
             return card.equals("card-A") && pin.equals("1234") ? "account-A" : null;
         }
         public long availableBalance(String account) {
+            if (fail.equals("balance")) throw new RuntimeException();
             return funds - holds.values().stream().mapToLong(Long::longValue).sum();
         }
         public boolean hold(String account, long amount, String id) {
@@ -21,10 +22,12 @@ public final class ATMTest {
         public void capture(String id) {
             if (fail.equals("capture")) throw new RuntimeException();
             funds -= holds.remove(id);
+            if (fail.equals("capture_after")) throw new RuntimeException();
         }
         public void release(String id) {
             if (fail.equals("release")) throw new RuntimeException();
             holds.remove(id);
+            if (fail.equals("release_after")) throw new RuntimeException();
         }
     }
     static class Device implements ATM.Hardware {
@@ -93,6 +96,27 @@ public final class ATMTest {
         }
         device.ejectFails = true; atm.cancel();
         check(atm.state().equals("OUT_OF_SERVICE"));
+
+        for (String stage : List.of("capture_after", "release_after")) {
+            bank = new Bank(); device = new Device(); atm = ready(bank, device);
+            bank.fail = stage;
+            boolean delivered = stage.equals("capture_after");
+            device.outcome = delivered ? "ALL" : "NONE";
+            check(atm.withdraw(20000).equals("PENDING_REVIEW"));
+            check(atm.state().equals("OUT_OF_SERVICE") && atm.pendingOperation() != null);
+            check(bank.holds.isEmpty() && bank.funds == (delivered ? 80000 : 100000));
+            check(atm.cashSnapshot().get(20000L) == (delivered ? 2 : 3));
+            check(device.calls == 1);
+            try { atm.withdraw(20000); throw new AssertionError(); }
+            catch (IllegalStateException expected) { }
+        }
+        bank = new Bank(); device = new Device(); atm = ready(bank, device);
+        bank.fail = "balance";
+        try { atm.balance(); throw new AssertionError(); }
+        catch (RuntimeException expected) { }
+        check(atm.state().equals("READY") && device.ejections == 0);
+        bank.fail = "";
+        check(atm.balance() == 100000);
 
         Bank concurrentBank = new Bank(); Device concurrentDevice = new Device();
         ATM shared = new ATM(concurrentBank, concurrentDevice, Map.of(20000L, 1), 100000);

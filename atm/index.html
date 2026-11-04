@@ -794,6 +794,17 @@ Out of scope:
 <p>Walk through the outcomes before adding more features. Use a fake bank with an account balance and a map of active holds. Use a fake dispenser whose result can be set to ALL, NONE, UNKNOWN, or a timeout. This makes failure paths reproducible without real banking or hardware.</p>
 <h4 id="a-successful-withdrawal-that-greedy-selection-would-miss">A successful withdrawal that greedy selection would miss</h4>
 <p>Start with ₹1,000 in the account and cash stock <code>{50000: 1, 20000: 3}</code>. Authenticate, then withdraw <code>60000</code> paise. Expect three ₹200 notes, ₹400 remaining in the account, and no active hold. The ₹500 note must remain in the machine.</p>
+<div class="codebox"><div class="codebar"><span class="code-title">A successful withdrawal that greedy selection would miss</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Initial: bank balance = 100000 paise, no holds
+         notes = {50000: 1, 20000: 3}
+
+plan(60000) -&gt; {20000: 3}              // inventory unchanged
+hold(account, 60000, operationId)     // available balance becomes 40000
+hardware.dispense({20000: 3}) -&gt; ALL
+recordDispensed({20000: 3})           // notes become {50000: 1, 20000: 0}
+capture(operationId)                 // posted balance becomes 40000, hold removed
+
+Result: SUCCESS, ATM stays READY, pending ID cleared
+</code></pre></div>
 <h4 id="rejection-must-not-move-money">Rejection must not move money</h4>
 <p>Try withdrawal before authentication, zero, a negative amount, and an amount above the limit. All must fail before a bank hold. Try ₹100 against the same stock: cash planning fails even though total cash is sufficient. Then lower bank funds below a valid bundle's amount: the bank declines and the dispenser is never called.</p>
 <h4 id="delivery-outcomes-must-have-different-effects">Delivery outcomes must have different effects</h4>
@@ -839,9 +850,22 @@ Out of scope:
 </tr>
 </tbody>
 </table>
-<p>A fake can throw after creating a hold. That tests why an exception must not be interpreted as a definite decline. Check that the pending operation ID survives and that <code>cancel</code> cannot bring the machine back online.</p>
+<p>A fake can throw after creating a hold. That tests why an exception must not be interpreted as a definite decline. Also test capture and release both before and after the bank applies the change. The ATM sees the same timeout in either case.</p>
+<p>For example, the customer receives ₹200 and the bank captures the hold, but its reply never arrives:</p>
+<div class="codebox"><div class="codebar"><span class="code-title">Delivery outcomes must have different effects</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Bank before withdrawal: 100000 paise
+hold(20000) succeeds
+Dispenser reports ALL
+ATM removes one 20000-paise note from inventory
+Bank captures the hold: balance = 80000, hold removed
+Capture reply is lost: ATM receives a timeout
+
+ATM result: PENDING_REVIEW
+ATM state: OUT_OF_SERVICE, operation ID retained
+No refund and no second dispensing attempt
+</code></pre></div>
+<p>The test knows the bank applied the debit because it controls the fake. The ATM does not know that yet. Retaining the ID allows later review to resolve the outcome without moving money again. Check that <code>cancel</code> cannot bring the machine back online.</p>
 <h4 id="session-boundaries-and-concurrent-calls">Session boundaries and concurrent calls</h4>
-<p>Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.</p>
+<p>Three wrong PINs should eject once and clear the session. Cancellation should remove access to balance and withdrawal. A failed ejection should disable the ATM. A failed balance read should leave the authenticated session open because it changes no money. With only one ₹200 note, two concurrent ₹200 withdrawals should produce one success and one cash shortage. They must never both dispense the same note.</p>
 <p>The included tests also compare the planner against all combinations of several small inventories. That checks exact amounts, available counts, and planning without mutation instead of only checking one happy path.</p>
 <p>Run the tests from the repository root:</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Session boundaries and concurrent calls</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>python3<span class="w"> </span>-m<span class="w"> </span>unittest<span class="w"> </span>discover<span class="w"> </span>-s<span class="w"> </span>atm<span class="w"> </span>-v
