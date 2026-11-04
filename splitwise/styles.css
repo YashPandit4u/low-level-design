@@ -21,7 +21,6 @@ article h5{font-size:17px;font-weight:600;margin:24px 0 16px;color:var(--text)}
 
 .reference-code{margin:24px 0;border:1px solid var(--border);border-radius:8px;padding:0 16px}.reference-code>summary{cursor:pointer;padding:16px 0;color:var(--primary);font-weight:600}.reference-code .codebox{margin:0 0 16px}
 
-.editions{display:inline-flex;gap:4px;margin-top:14px;padding:4px;background:var(--soft);border:1px solid var(--border);border-radius:8px}.editions a{padding:5px 14px;border-radius:5px;font-size:13px;line-height:22px}.editions a[aria-current=page]{background:var(--paper);color:var(--primary);font-weight:600;box-shadow:0 1px 3px #0001}
 
 /* One shared shell keeps the header, article and navigation aligned at every width. */
 :root{--page-width:1360px;--page-gutter:clamp(20px,3vw,56px)}

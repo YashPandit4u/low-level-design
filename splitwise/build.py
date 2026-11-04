@@ -1,4 +1,4 @@
-"""Regenerate both article editions. pip install -r requirements.txt"""
+"""Regenerate the Splitwise article. pip install -r requirements.txt"""
 from pathlib import Path
 import base64
 import re
@@ -10,20 +10,15 @@ from pygments.lexers import get_lexer_by_name, TextLexer
 from pygments.formatters import HtmlFormatter
 
 ROOT = Path(__file__).resolve().parent
-def build(detailed=False):
-    ARTICLE = ROOT / ('TUTORIAL-DETAILED.md' if detailed else 'TUTORIAL.md')
-    output = 'index.html' if detailed else 'simplified.html'
-    edition = 'Detailed' if detailed else 'Simplified'
-    code_title = 'Complete Code Implementation' if detailed else 'Extended Code Reference'
-    code_description = 'Read the working solution in your preferred language' if detailed else 'Optional implementations of the follow-up design'
-    version_links = '<nav class="editions" aria-label="Article version">' + ''.join(
-        f'<a href="{href}"' + (' aria-current="page"' if selected else '') + f'>{label}</a>'
-        for href, label, selected in [('index.html', 'Detailed', detailed), ('simplified.html', 'Simplified', not detailed)]
-    ) + '</nav>'
+def build():
+    ARTICLE = ROOT / 'TUTORIAL-DETAILED.md'
+    output = 'index.html'
+    code_title = 'Complete Code Implementation'
+    code_description = 'Read the working solution in your preferred language'
     soup = BeautifulSoup(markdown.markdown(ARTICLE.read_text(), extensions=['tables', 'fenced_code', 'toc']), 'html.parser')
     soup.h1.decompose()
     for h in soup.find_all(['h2', 'h3']):
-        titles = {'Understanding the problem':'Understanding the Problem', 'Core entities and relationships':'Core Entities and Relationships', 'Class design':'Class Design', 'Clarifying questions':'Clarifying Questions', 'Final requirements':'Final Requirements', 'Final class design':'Final Class Design', 'What is expected at each level?':'What is Expected at Each Level?', 'Test your understanding':'Test Your Understanding', 'Complete reference implementations':('Complete Code Implementation' if detailed else 'Extended Reference Implementations')}
+        titles = {'Understanding the problem':'Understanding the Problem', 'Core entities and relationships':'Core Entities and Relationships', 'Class design':'Class Design', 'Clarifying questions':'Clarifying Questions', 'Final requirements':'Final Requirements', 'Final class design':'Final Class Design', 'What is expected at each level?':'What is Expected at Each Level?', 'Test your understanding':'Test Your Understanding', 'Complete reference implementations':'Complete Code Implementation'}
         if h.get_text() in titles: h.string = titles[h.get_text()]
 
 
@@ -132,15 +127,7 @@ def build(detailed=False):
     node = frag(widget)
     node.find(id=ident+'-java')['hidden']=''
     for lang in ['python','java']: node.find(id=ident+'-'+lang)['aria-labelledby']=ident+'-'+lang+'-tab'
-    if detailed:
-        anchor.insert_after(node)
-    else:
-        reference = soup.new_tag('details', attrs={'class': 'reference-code'})
-        summary = soup.new_tag('summary')
-        summary.string = 'Open the extended Python / Java implementation'
-        reference.append(summary)
-        reference.append(node)
-        anchor.find_next_sibling('p').insert_after(reference)
+    anchor.insert_after(node)
     # Source links continue to work when served from the repository.
     for a in soup.find_all('a',href=True):
         if '://' not in a['href'] and not a['href'].startswith('#'): a['href']=a['href']
@@ -157,20 +144,18 @@ def build(detailed=False):
     css=(ROOT/'styles.css').read_text().replace('FONT_DATA',font)
     js=(ROOT/'app.js').read_text()
     page=f'''<!doctype html>
-    <html lang="en"><head><meta charset="utf-8"><link rel="icon" type="image/svg+xml" href="../favicon.svg"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Splitwise Low Level Design | {edition} Edition</title><meta name="description" content="A complete Splitwise low-level design walkthrough with Python and Java, trade-offs, verification, and follow-ups."><style>{css}</style></head><body>
+    <html lang="en"><head><meta charset="utf-8"><link rel="icon" type="image/svg+xml" href="../favicon.svg"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Splitwise Low Level Design</title><meta name="description" content="A complete Splitwise low-level design walkthrough with Python and Java, trade-offs, verification, and follow-ups."><style>{css}</style></head><body>
     <a class="skip" href="#article">Skip to article</a>
 
     <main class="main" id="top"><header class="topbar"><button class="search-trigger" aria-label="Search article sections"><span class="search-label"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.75" cy="10.75" r="6.75"/><path d="m16 16 4.25 4.25"/></svg><span>Search sections</span></span><kbd>⌘ K</kbd></button><div class="top-actions"><a class="article-home" href="#top">Low Level Design <span>/</span> Splitwise</a><button id="theme" aria-label="Switch to dark mode" title="Switch to dark mode"><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13.1A8.5 8.5 0 0 1 10.9 3.5 8.5 8.5 0 1 0 20.5 13.1Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg></button></div></header>
-    <div class="outer"><div class="layout"><article id="article"><div class="article-header"><div class="eyebrow">Low Level Design</div><h1>Splitwise</h1><p class="metadata">Independent study article <span>·</span> <span class="difficulty">◉ medium</span> <span>·</span> Python &amp; Java <span>·</span> {edition} edition</p>{version_links}</div><div class="feature-card green"><span class="feature-icon">⌘</span><div><h2>{code_title}</h2><p>{code_description}</p></div><a href="#complete-reference-implementations">View Code &nbsp; →</a></div><div class="feature-card coral"><span class="feature-icon">≋</span><div><h2>Explore the Design Trade-offs</h2><p>Compare approaches and understand the decisions</p></div><a href="#group">Compare &nbsp; →</a></div>
+    <div class="outer"><div class="layout"><article id="article"><div class="article-header"><div class="eyebrow">Low Level Design</div><h1>Splitwise</h1><p class="metadata">Independent study article <span>·</span> <span class="difficulty">◉ medium</span> <span>·</span> Python &amp; Java</p></div><div class="feature-card green"><span class="feature-icon">⌘</span><div><h2>{code_title}</h2><p>{code_description}</p></div><a href="#complete-reference-implementations">View Code &nbsp; →</a></div><div class="feature-card coral"><span class="feature-icon">≋</span><div><h2>Explore the Design Trade-offs</h2><p>Compare approaches and understand the decisions</p></div><a href="#group">Compare &nbsp; →</a></div>
     {str(soup)}
     <footer class="article-footer"><p>Written by Yash Pandit.</p><a href="#top">↑ Back to top</a><a href="{ARTICLE.name}">Read Markdown</a></footer></article><aside class="toc" aria-label="On this page"><div class="reading-tools"><button id="focus" aria-pressed="false">◫ &nbsp; Focus</button><button id="expand" aria-pressed="false">Expand comparisons</button></div><div class="progress-label">Reading Progress</div><div class="progress" role="progressbar" aria-label="Reading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div></div></div><h2>On This Page</h2><nav>{toc}</nav></aside></div></div></main>
     <button id="exit-focus" hidden>◫ Exit focus</button><dialog id="search-dialog"><form method="dialog"><input id="search-input" aria-label="Search sections" placeholder="Search article sections…" autocomplete="off"><button aria-label="Close search">Esc</button></form><nav id="search-results"></nav></dialog><div id="toast" role="status" aria-live="polite"></div><script>{js}</script></body></html>'''
     (ROOT/output).write_text(page)
-    if detailed:
-        (ROOT/'detailed.html').write_text(page)  # Keep previously shared links working.
+    (ROOT/'detailed.html').write_text(page)  # Keep previously shared links working.
     print(f'Built {output}: {count} paired code panels; {len(headings)} section links; {len(page):,} bytes.')
 
 
 if __name__ == "__main__":
-    build(False)
-    build(True)
+    build()

@@ -4,12 +4,9 @@ Articles and implementations by Yash Pandit.
 
 ## Splitwise
 
-- [Read the detailed article](https://yashpandit4u.github.io/low-level-design/splitwise/)
-- [Read the simplified article](https://yashpandit4u.github.io/low-level-design/splitwise/simplified.html)
-- [Detailed Markdown](splitwise/TUTORIAL-DETAILED.md)
-- [Simplified Markdown](splitwise/TUTORIAL.md)
+- [Read the article](https://yashpandit4u.github.io/low-level-design/splitwise/)
+- [Article Markdown](splitwise/TUTORIAL-DETAILED.md)
 
-Split the bills, but share the knowledge.
 
 ## Local preview
 
