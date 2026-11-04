@@ -902,6 +902,8 @@ No refund and no second dispensing attempt
 
 The test knows the bank applied the debit because it controls the fake. The ATM does not know that yet. Retaining the ID allows later review to resolve the outcome without moving money again. Check that `cancel` cannot bring the machine back online.
 
+Also combine failures: let dispensing return UNKNOWN and then make card ejection fail. The pending ID must survive both failures. Another card, PIN, balance inquiry, or withdrawal must be rejected without another bank or dispense call. Cancellation must not retry ejection or clear the pending ID.
+
 #### Session boundaries and concurrent calls
 
 Try a session trace as well. This checks that a rejected operation does not quietly change who is using the ATM.
@@ -949,7 +951,7 @@ Download [atm.py](atm.py) or [ATM.java](ATM.java).
 
 **What happens if the process crashes after cash is delivered?**
 
-Our pending ID is only in memory, so a crash loses it. Save a withdrawal record to persistent storage before creating the hold. Save each confirmed outcome and the ID of the dispenser's stored transaction record. After restarting, compare the bank and dispenser records before accepting more withdrawals. A database rollback cannot take cash back from a customer.
+Our pending ID is only in memory, so a crash loses it. Before creating the hold, save the operation ID, account ID, amount, and planned notes to persistent storage. Save each confirmed outcome and the ID of the dispenser's stored transaction record. The account and amount must remain available after the session is cleared. After restarting, compare the bank and dispenser records before accepting more withdrawals. A database rollback cannot take cash back from a customer.
 
 **How would you support retries?**
 

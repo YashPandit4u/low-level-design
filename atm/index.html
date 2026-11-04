@@ -939,6 +939,7 @@ ATM state: OUT_OF_SERVICE, operation ID retained
 No refund and no second dispensing attempt
 </code></pre></div>
 <p>The test knows the bank applied the debit because it controls the fake. The ATM does not know that yet. Retaining the ID allows later review to resolve the outcome without moving money again. Check that <code>cancel</code> cannot bring the machine back online.</p>
+<p>Also combine failures: let dispensing return UNKNOWN and then make card ejection fail. The pending ID must survive both failures. Another card, PIN, balance inquiry, or withdrawal must be rejected without another bank or dispense call. Cancellation must not retry ejection or clear the pending ID.</p>
 <h4 id="session-boundaries-and-concurrent-calls">Session boundaries and concurrent calls</h4>
 <p>Try a session trace as well. This checks that a rejected operation does not quietly change who is using the ATM.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Session boundaries and concurrent calls</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Insert card-A                 -&gt; PIN_REQUIRED, attempts = 0
@@ -1320,7 +1321,7 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
 <p>Download <a href="atm.py">atm.py</a> or <a href="ATM.java">ATM.java</a>.</p>
 <h2 id="follow-ups">Follow-ups<a aria-label="Link to Follow-ups" class="heading-anchor" href="#follow-ups">#</a></h2>
 <p><strong>What happens if the process crashes after cash is delivered?</strong></p>
-<p>Our pending ID is only in memory, so a crash loses it. Save a withdrawal record to persistent storage before creating the hold. Save each confirmed outcome and the ID of the dispenser's stored transaction record. After restarting, compare the bank and dispenser records before accepting more withdrawals. A database rollback cannot take cash back from a customer.</p>
+<p>Our pending ID is only in memory, so a crash loses it. Before creating the hold, save the operation ID, account ID, amount, and planned notes to persistent storage. Save each confirmed outcome and the ID of the dispenser's stored transaction record. The account and amount must remain available after the session is cleared. After restarting, compare the bank and dispenser records before accepting more withdrawals. A database rollback cannot take cash back from a customer.</p>
 <p><strong>How would you support retries?</strong></p>
 <p>Give the withdrawal a stable request ID before the first attempt. Store its amount, account, and result. Repeating that ID must return or resume the same operation, not dispense again. The bank and hardware must recognize repeated IDs or let us check an earlier result. That is what makes a retry safe. Giving every retry a new ID would make it look like another withdrawal.</p>
 <p><strong>What if only some notes were delivered?</strong></p>

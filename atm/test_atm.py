@@ -182,6 +182,26 @@ class ATMTest(unittest.TestCase):
                 self.atm.cancel()
                 self.assertEqual(self.atm.status()[0], 'OUT_OF_SERVICE')
 
+    def test_uncertain_withdrawal_and_failed_ejection_preserve_pending(self):
+        self.login()
+        self.hardware.outcome = 'UNKNOWN'
+        self.hardware.eject_fails = True
+        self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
+        state, pending = self.atm.status()
+        self.assertEqual(state, 'OUT_OF_SERVICE')
+        self.assertIn(pending, self.bank.holds)
+        self.assertEqual(self.bank.calls, ['hold'])
+        self.atm.cancel()
+        for action in [lambda: self.atm.insert_card('card-B'),
+                       lambda: self.atm.enter_pin('1234'),
+                       lambda: self.atm.balance(), lambda: self.atm.withdraw(20000)]:
+            with self.assertRaises(ValueError): action()
+        self.assertEqual(self.atm.status(), (state, pending))
+        self.assertEqual(self.hardware.ejections, 1)
+        self.assertEqual(self.hardware.dispensed, [{20000: 1}])
+        self.assertEqual(self.atm.cash_snapshot(), {50000: 1, 20000: 3})
+        self.assertEqual(self.bank.funds, 100000)
+
     def test_bank_failure_at_each_money_step(self):
         for stage in ['hold', 'capture', 'release']:
             with self.subTest(stage=stage):

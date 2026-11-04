@@ -183,3 +183,12 @@ Results are recorded below in execution order. Each entry identifies its assigne
 - Publication: article commit contains this entry. Deployment verification follows below.
 
 - Deployment verified: commit `d248b658009a7a009ab95ef2114e345bad8c1995`; [Pages run 41783260659](https://github.com/YashPandit4u/low-level-design/actions/runs/41783260659) succeeded. Live `/atm/` matches tested HTML byte for byte, SHA-256 `c2e5ea80d6f21a677dd3b2ac2f434a92ce7bd21eecf9422f5cb07d8c917fbccc`. **Iteration 12 complete.** Reviews 13–15 remain scheduled.
+
+### Iteration 13 — combined failures and recovery limits (2026-11-04)
+
+- Read all preceding results and confirmed review 12's verified deployment. Rechecked pending-ID preservation, session cleanup, no automatic refund/retry, and the existing lock-based concurrency tests.
+- Reference actually read in Chrome: Inventory Management's Extensibility introduction, reservation/confirmation/release/expiry discussion, and in-transit transfer follow-up. Inspected the actual article UI. Used its concrete explanation of what additional state a follow-up needs, without importing its inventory assumptions into physical cash handling.
+- Concrete gaps: uncertainty and ejection failure were tested separately, but their combination lacked direct coverage. Crash recovery said to persist a withdrawal record without naming the account/amount/bundle data that must survive session cleanup.
+- Changes: matching Python/Java combined-failure tests verify pending-ID retention, preserved unresolved hold, no second dispense/ejection, and rejection of new customer operations. Added a short verification explanation. Clarified the required persistent record fields in the crash-recovery follow-up only. No new production state, recovery implementation, or UI components.
+- Validation: rebuilt both HTML aliases and Markdown. Rendered Python matches source AST and passes 23 tests. Java scenarios pass, including existing concurrent cancellation, account isolation, and 540 allocation cases per language. All 11 tab pairs, local links, IDs and verification nesting pass. Splitwise unchanged.
+- Publication: article commit contains this entry. Deployment verification follows below.

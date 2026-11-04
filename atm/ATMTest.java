@@ -201,7 +201,29 @@ public final class ATMTest {
         check(bank.funds == 80000 && device.calls == 1);
     }
 
+    static void uncertainWithdrawalWithStuckCard() {
+        Bank bank = new Bank(); Device device = new Device();
+        ATM atm = ready(bank, device);
+        device.outcome = "UNKNOWN";
+        device.ejectFails = true;
+        check(atm.withdraw(20000).equals("PENDING_REVIEW"));
+        String pending = atm.pendingOperation();
+        check(atm.state().equals("OUT_OF_SERVICE") && bank.holds.containsKey(pending));
+        atm.cancel();
+        for (Runnable action : List.<Runnable>of(
+                () -> atm.insertCard("card-B"), () -> atm.enterPin("1234"),
+                () -> atm.balance(), () -> atm.withdraw(20000))) {
+            try { action.run(); throw new AssertionError(); }
+            catch (IllegalStateException expected) { }
+        }
+        check(atm.state().equals("OUT_OF_SERVICE") && atm.pendingOperation().equals(pending));
+        check(device.ejections == 1 && device.calls == 1);
+        check(bank.funds == 100000 && bank.holds.get(pending) == 20000);
+        check(atm.cashSnapshot().equals(Map.of(50000L, 1, 20000L, 3)));
+    }
+
     public static void main(String[] args) throws Exception {
+        uncertainWithdrawalWithStuckCard();
         accountAndStockBoundaries();
         cancellationDuringDispensing();
         shortageThenSuccess();
