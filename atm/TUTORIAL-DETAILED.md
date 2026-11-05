@@ -246,7 +246,7 @@ Here is what we will implement:
 
 We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.
 
-The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the **Core logic** and **Edge cases** before the steps. Simple methods get a shorter explanation. `require` rejects an invalid operation before it changes state, and `under lock` holds the ATM lock for the enclosed steps. The tests use a fake bank and dispenser so we can control their responses.
+The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the **Core logic** and **Edge cases** before the steps. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.
 
 ### ATM
 
@@ -257,7 +257,8 @@ All public operations use the same lock. One physical ATM serves one session at 
 
 ```text
 ATM(bank, hardware, notes, withdrawalLimit)
-    require withdrawalLimit > 0
+    if withdrawalLimit <= 0
+        throw Error("Invalid withdrawal limit")
     this.bank = bank
     this.hardware = hardware
     cash = CashInventory(notes)
@@ -293,22 +294,26 @@ Reinserting a card starts a new attempt count. Blocking that card across all ATM
 
 ```text
 insertCard(cardId)
-    under lock
-        require state == IDLE
-        require cardId is not blank
+    synchronized(this)
+        if state != IDLE
+            throw Error("ATM is not available")
+        if cardId == null or cardId is blank
+            throw Error("Card ID required")
         card = cardId
         attempts = 0
         state = PIN_REQUIRED
 
 enterPin(pin)
-    under lock
-        require state == PIN_REQUIRED
-        require pin is not empty
+    synchronized(this)
+        if state != PIN_REQUIRED
+            throw Error("Insert a card first")
+        if pin == null or pin is empty
+            throw Error("PIN required")
         try
             authenticatedAccount = bank.authenticate(card, pin)
-        on bank error
+        catch error
             endSession(true)
-            raise error
+            throw Error("Bank unavailable")
 
         if authenticatedAccount == null
             attempts += 1
@@ -328,8 +333,9 @@ After authentication, ask the bank for the current available balance. We do not 
 
 ```text
 balance()
-    under lock
-        require state == READY
+    synchronized(this)
+        if state != READY
+            throw Error("Authenticate first")
         return bank.availableBalance(account)
 ```
 
@@ -389,9 +395,11 @@ Notice that inventory is reduced before capture. Once delivery is confirmed, tho
 
 ```text
 withdraw(amount)
-    under lock
-        require state == READY
-        require 0 < amount <= limit
+    synchronized(this)
+        if state != READY
+            throw Error("Authenticate first")
+        if amount <= 0 or amount > limit
+            throw Error("Invalid withdrawal amount")
         plan = cash.plan(amount)
         if plan == null
             return CASH_UNAVAILABLE
@@ -417,7 +425,7 @@ withdraw(amount)
             bank.capture(operationId)
             pending = null
             return SUCCESS
-        on operation error
+        catch error
             endSession(true)
             return PENDING_REVIEW
 ```
@@ -433,19 +441,22 @@ Cancellation ends a session waiting for a PIN or ready for operations. It does n
 
 ```text
 cancel()
-    under lock
+    synchronized(this)
         if state == PIN_REQUIRED or state == READY
             endSession(false)
 
 endSession(outOfService)
-    state = OUT_OF_SERVICE if outOfService else IDLE
+    if outOfService
+        state = OUT_OF_SERVICE
+    else
+        state = IDLE
     card = null
     account = null
     attempts = 0
     // Keep pending until the withdrawal is resolved.
     try
         hardware.ejectCard()
-    on ejection error
+    catch error
         state = OUT_OF_SERVICE
 ```
 
@@ -457,7 +468,8 @@ Start with the stock we were given at startup. The constructor rejects nonpositi
 ```text
 CashInventory(initialNotes)
     for denomination, count in initialNotes
-        require denomination > 0 and count >= 0
+        if denomination <= 0 or count < 0
+            throw Error("Invalid denomination or note count")
     notes = copy(initialNotes)
 ```
 
@@ -759,18 +771,31 @@ ATM
 Use the durable withdrawal record from the previous follow-up. The lookup and creation must be atomic so two threads cannot both claim a new ID.
 
 ```text
-At withdrawal admission, while holding the ATM lock
-  require an authenticated session
-  record = store.find(requestId)
-  if record exists
-    require record.accountId == currentAccount
-    require record.amount == amount
-    return record.result if completed, otherwise PENDING_REVIEW
+// Admission checks for retry-aware withdraw(requestId, amount)
+synchronized(this)
+    if account == null
+        throw Error("Authenticate first")
 
-  require the machine is ready for a new withdrawal
-  validate amount and plan notes
-  store.insertUnique(requestId, currentAccount, amount, plannedNotes)
-  // Only the caller that created the record starts the withdrawal.
+    record = store.find(requestId)
+    if record != null
+        if record.accountId != account
+            throw Error("Request belongs to another account")
+        if record.amount != amount
+            throw Error("Request amount does not match")
+        if record.phase == COMPLETED
+            return record.result
+        return PENDING_REVIEW
+
+    if state != READY
+        throw Error("ATM is not available")
+    if amount <= 0 or amount > limit
+        throw Error("Invalid withdrawal amount")
+    plannedNotes = cash.plan(amount)
+    if plannedNotes == null
+        return CASH_UNAVAILABLE
+
+    store.insertUnique(requestId, account, amount, plannedNotes)
+    // The caller that creates the record continues the withdrawal flow.
 ```
 
 The stored account prevents another customer's session from reusing the ID to retrieve or execute that withdrawal. The pending record also keeps the machine unavailable to competing money operations.

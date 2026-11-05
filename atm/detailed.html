@@ -361,12 +361,13 @@ Out of scope:
 <li><strong>ATMState:</strong> define the allowed states.</li>
 </ul>
 <p>We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.</p>
-<p>The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the <strong>Core logic</strong> and <strong>Edge cases</strong> before the steps. Simple methods get a shorter explanation. <code>require</code> rejects an invalid operation before it changes state, and <code>under lock</code> holds the ATM lock for the enclosed steps. The tests use a fake bank and dispenser so we can control their responses.</p>
+<p>The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the <strong>Core logic</strong> and <strong>Edge cases</strong> before the steps. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.</p>
 <h3 id="atm_1">ATM<a aria-label="Link to ATM" class="heading-anchor" href="#atm_1">#</a></h3>
 <p>Start with the constructor. It receives the two adapters, the initial cash stock, and a withdrawal limit. We already designed their interfaces above, so we can follow the ATM flow before filling in those dependencies. It creates its own inventory and begins without a card or account.</p>
 <p>All public operations use the same lock. One physical ATM serves one session at a time, so serial execution is a reasonable starting point. This lock protects local session and cash state. The bank must still protect the account across other ATMs.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>ATM(bank, hardware, notes, withdrawalLimit)
-    require withdrawalLimit &gt; 0
+    if withdrawalLimit &lt;= 0
+        throw Error("Invalid withdrawal limit")
     this.bank = bank
     this.hardware = hardware
     cash = CashInventory(notes)
@@ -396,22 +397,26 @@ Out of scope:
 </ul>
 <p>Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>insertCard(cardId)
-    under lock
-        require state == IDLE
-        require cardId is not blank
+    synchronized(this)
+        if state != IDLE
+            throw Error("ATM is not available")
+        if cardId == null or cardId is blank
+            throw Error("Card ID required")
         card = cardId
         attempts = 0
         state = PIN_REQUIRED
 
 enterPin(pin)
-    under lock
-        require state == PIN_REQUIRED
-        require pin is not empty
+    synchronized(this)
+        if state != PIN_REQUIRED
+            throw Error("Insert a card first")
+        if pin == null or pin is empty
+            throw Error("PIN required")
         try
             authenticatedAccount = bank.authenticate(card, pin)
-        on bank error
+        catch error
             endSession(true)
-            raise error
+            throw Error("Bank unavailable")
 
         if authenticatedAccount == null
             attempts += 1
@@ -426,8 +431,9 @@ enterPin(pin)
 <p><strong>Reading the balance</strong></p>
 <p>After authentication, ask the bank for the current available balance. We do not cache it in the ATM because other account activity can change it. If the bank read fails, the error reaches the caller without changing cash or ending the session.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>balance()
-    under lock
-        require state == READY
+    synchronized(this)
+        if state != READY
+            throw Error("Authenticate first")
         return bank.availableBalance(account)
 </code></pre></div>
 <p><strong>Withdrawing cash</strong></p>
@@ -494,9 +500,11 @@ enterPin(pin)
 <p>The lock prevents two local operations from overlapping. It cannot undo cash delivery or make the bank and dispenser commit together. That is why we still need PENDING_REVIEW even though every ATM method is synchronized.</p>
 <p>Notice that inventory is reduced before capture. Once delivery is confirmed, those notes are gone even if the capture response later times out. For UNKNOWN, the stored counts are only the last confirmed stock. They must not be treated as current stock until maintenance reconciles the machine.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Resolve known outcomes and stop on uncertainty</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>withdraw(amount)
-    under lock
-        require state == READY
-        require 0 &lt; amount &lt;= limit
+    synchronized(this)
+        if state != READY
+            throw Error("Authenticate first")
+        if amount &lt;= 0 or amount &gt; limit
+            throw Error("Invalid withdrawal amount")
         plan = cash.plan(amount)
         if plan == null
             return CASH_UNAVAILABLE
@@ -522,7 +530,7 @@ enterPin(pin)
             bank.capture(operationId)
             pending = null
             return SUCCESS
-        on operation error
+        catch error
             endSession(true)
             return PENDING_REVIEW
 </code></pre></div>
@@ -531,26 +539,30 @@ enterPin(pin)
 <p>Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.</p>
 <p><code>endSession</code> is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Resolve known outcomes and stop on uncertainty</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>cancel()
-    under lock
+    synchronized(this)
         if state == PIN_REQUIRED or state == READY
             endSession(false)
 
 endSession(outOfService)
-    state = OUT_OF_SERVICE if outOfService else IDLE
+    if outOfService
+        state = OUT_OF_SERVICE
+    else
+        state = IDLE
     card = null
     account = null
     attempts = 0
     // Keep pending until the withdrawal is resolved.
     try
         hardware.ejectCard()
-    on ejection error
+    catch error
         state = OUT_OF_SERVICE
 </code></pre></div>
 <h3 id="cashinventory_1">CashInventory<a aria-label="Link to CashInventory" class="heading-anchor" href="#cashinventory_1">#</a></h3>
 <p>Start with the stock we were given at startup. The constructor rejects nonpositive denominations and negative counts. Zero counts are valid: a cassette may be empty. Copy the map so later changes to the caller's configuration cannot change the ATM's stock.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">CashInventory</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>CashInventory(initialNotes)
     for denomination, count in initialNotes
-        require denomination &gt; 0 and count &gt;= 0
+        if denomination &lt;= 0 or count &lt; 0
+            throw Error("Invalid denomination or note count")
     notes = copy(initialNotes)
 </code></pre></div>
 <p><strong>Planning the bundle</strong></p>
@@ -1158,18 +1170,31 @@ WithdrawalPhase
 <p>I would look up the request before starting any money operation. If it already completed, I would return the stored result. If it is still running or uncertain, I would return PENDING_REVIEW or an in-progress result. I would also check that the ID still refers to the same account and amount.</p>
 </blockquote>
 <p>Use the durable withdrawal record from the previous follow-up. The lookup and creation must be atomic so two threads cannot both claim a new ID.</p>
-<div class="codebox"><div class="codebar"><span class="code-title">2. How would you support retries without dispensing twice?</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>At withdrawal admission, while holding the ATM lock
-  require an authenticated session
-  record = store.find(requestId)
-  if record exists
-    require record.accountId == currentAccount
-    require record.amount == amount
-    return record.result if completed, otherwise PENDING_REVIEW
+<div class="codebox"><div class="codebar"><span class="code-title">2. How would you support retries without dispensing twice?</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>// Admission checks for retry-aware withdraw(requestId, amount)
+synchronized(this)
+    if account == null
+        throw Error("Authenticate first")
 
-  require the machine is ready for a new withdrawal
-  validate amount and plan notes
-  store.insertUnique(requestId, currentAccount, amount, plannedNotes)
-  // Only the caller that created the record starts the withdrawal.
+    record = store.find(requestId)
+    if record != null
+        if record.accountId != account
+            throw Error("Request belongs to another account")
+        if record.amount != amount
+            throw Error("Request amount does not match")
+        if record.phase == COMPLETED
+            return record.result
+        return PENDING_REVIEW
+
+    if state != READY
+        throw Error("ATM is not available")
+    if amount &lt;= 0 or amount &gt; limit
+        throw Error("Invalid withdrawal amount")
+    plannedNotes = cash.plan(amount)
+    if plannedNotes == null
+        return CASH_UNAVAILABLE
+
+    store.insertUnique(requestId, account, amount, plannedNotes)
+    // The caller that creates the record continues the withdrawal flow.
 </code></pre></div>
 <p>The stored account prevents another customer's session from reusing the ID to retrieve or execute that withdrawal. The pending record also keeps the machine unavailable to competing money operations.</p>
 <p>Application deduplication solves only one part. If the bank captures successfully and its reply is lost, a retry must not post another debit. Give bank operations a documented repeat-by-ID contract. The hardware needs durable deduplication of <code>dispense(operationId, notes)</code>, or a status lookup that conclusively resolves the earlier command. If it offers neither, an uncertain dispense must stay pending for review.</p>

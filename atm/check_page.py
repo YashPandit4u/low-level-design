@@ -43,6 +43,7 @@ for node in implementation.find_all_next():
         walkthrough.append(node.get_text())
 assert len(walkthrough) >= 11
 assert all('self.' not in code and 'public synchronized' not in code for code in walkthrough)
+assert all(not line.strip().startswith(('require ', 'under lock', 'on operation error', 'on bank error', 'on ejection error')) for code in soup.select('pre') for line in code.get_text().splitlines())
 assert 'withdraw(amount)' in '\n'.join(walkthrough)
 assert 'findBundle(index, remaining)' in '\n'.join(walkthrough)
 
