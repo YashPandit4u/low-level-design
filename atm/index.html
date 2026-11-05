@@ -345,10 +345,10 @@ Out of scope:
 <p><code>plan</code> returns a separate map, such as <code>{20000: 3}</code> for three ₹200 notes. A missing plan means the amount cannot be made. Only ATM passes a successful plan to <code>recordDispensed</code>, while still holding its lock. Neither the customer nor the hardware adapter can edit the stored inventory.</p>
 <h3 id="hardware">Hardware<a aria-label="Link to Hardware" class="heading-anchor" href="#hardware">#</a></h3>
 <div class="codebox"><div class="codebar"><span class="code-title">Hardware</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>interface Hardware
-  + dispense(notes: Map&lt;long, int&gt;) -&gt; string
+  + dispense(notes: Map&lt;long, int&gt;) -&gt; DispenseResult
   + ejectCard() -&gt; void
 </code></pre></div>
-<p>The dispenser reports <code>ALL</code> only when the exact bundle reached the customer. <code>NONE</code> means no cash was delivered. <code>UNKNOWN</code> covers uncertainty and partial delivery. A timeout is also uncertain. Those meanings must come from the hardware adapter, not from guessing based on an exception message.</p>
+<p><code>DispenseResult</code> defines the three delivery outcomes. The dispenser reports <code>ALL</code> only when the exact bundle reached the customer. <code>NONE</code> means no cash was delivered. <code>UNKNOWN</code> covers uncertainty and partial delivery. A timeout is also uncertain. Those meanings must come from the hardware adapter, not from guessing based on an exception message.</p>
 <h2 id="implementation">Implementation<a aria-label="Link to Implementation" class="heading-anchor" href="#implementation">#</a></h2>
 <p>We now have the pieces for one withdrawal. ATM asks CashInventory for a bundle, BankGateway for a hold, and Hardware to deliver the notes. Once delivery is confirmed, ATM updates CashInventory and asks BankGateway to capture the hold. Neither the inventory nor the dispenser decides whether the customer is authenticated. That check stays in ATM.</p>
 <p>The two methods worth spending most of our interview time on are <code>CashInventory.plan</code> and <code>ATM.withdraw</code>. The first chooses notes without changing stock. The second coordinates the bank and dispenser, including failures. We will also show the complete session methods so the flow from inserting a card to ejecting it is clear.</p>
@@ -358,9 +358,9 @@ Out of scope:
 <li><strong>CashInventory:</strong> implement <code>plan</code> in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.</li>
 <li><strong>BankGateway:</strong> define authentication, balance inquiry, and hold operations.</li>
 <li><strong>Hardware:</strong> define cash delivery and card ejection.</li>
-<li><strong>ATMState:</strong> define the allowed states.</li>
+<li><strong>ATMState and DispenseResult:</strong> define the allowed states and delivery outcomes.</li>
 </ul>
-<p>We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.</p>
+<p>We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state and delivery-result enums. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.</p>
 <p>The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the <strong>Core logic</strong> and <strong>Edge cases</strong> before the steps. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.</p>
 <h3 id="atm_1">ATM<a aria-label="Link to ATM" class="heading-anchor" href="#atm_1">#</a></h3>
 <p>Start with the constructor. It receives the two adapters, the initial cash stock, and a withdrawal limit. We already designed their interfaces above, so we can follow the ATM flow before filling in those dependencies. It creates its own inventory and begins without a card or account.</p>
@@ -518,12 +518,12 @@ Out of scope:
                 return DECLINED
 
             outcome = hardware.dispense(copy(plan))
-            if outcome == NONE
+            if outcome == DispenseResult.NONE
                 bank.release(operationId)
                 pending = null
                 return NOT_DISPENSED
 
-            if outcome != ALL
+            if outcome != DispenseResult.ALL
                 endSession(true)
                 return PENDING_REVIEW
 
@@ -650,7 +650,7 @@ findBundle(index, remaining)             // helper within this planning call
 <p>The hardware interface handles dispensing and card ejection. <code>dispense</code> reports ALL, NONE, or UNKNOWN according to the delivery guarantees defined above. A timeout does not prove that the external action stopped. Failed ejection raises an error so ATM can take the machine out of service.</p>
 <p>The hardware adapter must also avoid calling ATM methods while ATM holds its lock.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Hardware</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>interface Hardware
-    dispense(notes) -&gt; ALL, NONE, or UNKNOWN
+    dispense(notes) -&gt; DispenseResult
     ejectCard()
 </code></pre></div>
 <h3 id="atmstate">ATMState<a aria-label="Link to ATMState" class="heading-anchor" href="#atmstate">#</a></h3>
@@ -660,6 +660,13 @@ findBundle(index, remaining)             // helper within this planning call
     PIN_REQUIRED
     READY
     OUT_OF_SERVICE
+</code></pre></div>
+<h3 id="dispenseresult">DispenseResult<a aria-label="Link to DispenseResult" class="heading-anchor" href="#dispenseresult">#</a></h3>
+<p>DispenseResult names the delivery outcomes returned by Hardware. ATM uses these enum values to decide whether to capture, release, or retain the bank hold for review.</p>
+<div class="codebox"><div class="codebar"><span class="code-title">DispenseResult</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>enum DispenseResult
+    ALL
+    NONE
+    UNKNOWN
 </code></pre></div>
 <h3 id="verification">Verification<a aria-label="Link to Verification" class="heading-anchor" href="#verification">#</a></h3>
 <p>Walk through the outcomes before adding more features. Use a fake bank with an account balance and a map of active holds. Use a fake dispenser whose result can be set to ALL, NONE, UNKNOWN, or a timeout. This makes failure paths reproducible without real banking or hardware. Check the bank balance, note counts, and session state after each operation.</p>
@@ -775,6 +782,12 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
     <span class="n">OUT_OF_SERVICE</span> <span class="o">=</span> <span class="s2">"OUT_OF_SERVICE"</span>
 
 
+<span class="k">class</span><span class="w"> </span><span class="nc">DispenseResult</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+    <span class="n">ALL</span> <span class="o">=</span> <span class="s2">"ALL"</span>
+    <span class="n">NONE</span> <span class="o">=</span> <span class="s2">"NONE"</span>
+    <span class="n">UNKNOWN</span> <span class="o">=</span> <span class="s2">"UNKNOWN"</span>
+
+
 <span class="k">class</span><span class="w"> </span><span class="nc">BankGateway</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">authenticate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">card_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">"""Return an account ID, or None for a rejected card/PIN."""</span>
@@ -796,7 +809,7 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">Hardware</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">dispense</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">notes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">dispense</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">notes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">DispenseResult</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">"""ALL: exact bundle delivered. NONE: no cash left the machine.</span>
 <span class="sd">        UNKNOWN: delivery is uncertain, including partial delivery.</span>
 <span class="sd">        """</span>
@@ -909,11 +922,11 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
                     <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span> <span class="o">=</span> <span class="kc">None</span>
                     <span class="k">return</span> <span class="s2">"DECLINED"</span>
                 <span class="n">outcome</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hardware</span><span class="o">.</span><span class="n">dispense</span><span class="p">(</span><span class="nb">dict</span><span class="p">(</span><span class="n">plan</span><span class="p">))</span>
-                <span class="k">if</span> <span class="n">outcome</span> <span class="o">==</span> <span class="s2">"NONE"</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">outcome</span> <span class="o">==</span> <span class="n">DispenseResult</span><span class="o">.</span><span class="n">NONE</span><span class="p">:</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">_bank</span><span class="o">.</span><span class="n">release</span><span class="p">(</span><span class="n">operation_id</span><span class="p">)</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span> <span class="o">=</span> <span class="kc">None</span>
                     <span class="k">return</span> <span class="s2">"NOT_DISPENSED"</span>
-                <span class="k">if</span> <span class="n">outcome</span> <span class="o">!=</span> <span class="s2">"ALL"</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">outcome</span> <span class="o">!=</span> <span class="n">DispenseResult</span><span class="o">.</span><span class="n">ALL</span><span class="p">:</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">_end_session</span><span class="p">(</span><span class="n">out_of_service</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
                     <span class="k">return</span> <span class="s2">"PENDING_REVIEW"</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_cash</span><span class="o">.</span><span class="n">record_dispensed</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span>
@@ -947,6 +960,10 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
 <span class="w">        </span><span class="n">IDLE</span><span class="p">,</span><span class="w"> </span><span class="n">PIN_REQUIRED</span><span class="p">,</span><span class="w"> </span><span class="n">READY</span><span class="p">,</span><span class="w"> </span><span class="n">OUT_OF_SERVICE</span>
 <span class="w">    </span><span class="p">}</span>
 
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">enum</span><span class="w"> </span><span class="n">DispenseResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ALL</span><span class="p">,</span><span class="w"> </span><span class="n">NONE</span><span class="p">,</span><span class="w"> </span><span class="n">UNKNOWN</span>
+<span class="w">    </span><span class="p">}</span>
+
 <span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">BankGateway</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="n">String</span><span class="w"> </span><span class="nf">authenticate</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">cardId</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">pin</span><span class="p">);</span><span class="w"> </span><span class="c1">// null means rejected</span>
 <span class="w">        </span><span class="kt">long</span><span class="w"> </span><span class="nf">availableBalance</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">accountId</span><span class="p">);</span>
@@ -958,7 +975,7 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
 <span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Hardware</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="c1">// ALL: exact bundle delivered. NONE: nothing delivered.</span>
 <span class="w">        </span><span class="c1">// UNKNOWN: uncertain or partial delivery.</span>
-<span class="w">        </span><span class="n">String</span><span class="w"> </span><span class="nf">dispense</span><span class="p">(</span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">notes</span><span class="p">);</span>
+<span class="w">        </span><span class="n">DispenseResult</span><span class="w"> </span><span class="nf">dispense</span><span class="p">(</span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">notes</span><span class="p">);</span>
 <span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="nf">ejectCard</span><span class="p">();</span>
 <span class="w">    </span><span class="p">}</span>
 
@@ -1072,13 +1089,13 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
 <span class="w">                </span><span class="n">pending</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
 <span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="s">"DECLINED"</span><span class="p">;</span>
 <span class="w">            </span><span class="p">}</span>
-<span class="w">            </span><span class="n">String</span><span class="w"> </span><span class="n">outcome</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">hardware</span><span class="p">.</span><span class="na">dispense</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">copyOf</span><span class="p">(</span><span class="n">plan</span><span class="p">));</span>
-<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="s">"NONE"</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">outcome</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">DispenseResult</span><span class="w"> </span><span class="n">outcome</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">hardware</span><span class="p">.</span><span class="na">dispense</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">copyOf</span><span class="p">(</span><span class="n">plan</span><span class="p">));</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">outcome</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">DispenseResult</span><span class="p">.</span><span class="na">NONE</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">                </span><span class="n">bank</span><span class="p">.</span><span class="na">release</span><span class="p">(</span><span class="n">operationId</span><span class="p">);</span>
 <span class="w">                </span><span class="n">pending</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
 <span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="s">"NOT_DISPENSED"</span><span class="p">;</span>
 <span class="w">            </span><span class="p">}</span>
-<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="s">"ALL"</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">outcome</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">outcome</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">DispenseResult</span><span class="p">.</span><span class="na">ALL</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">                </span><span class="n">endSession</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
 <span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="s">"PENDING_REVIEW"</span><span class="p">;</span>
 <span class="w">            </span><span class="p">}</span>
@@ -1204,9 +1221,9 @@ synchronized(this)
 <p>Keep completed IDs long enough to cover the supported retry window. Deleting a record too early allows an old request to look new. That retention policy is part of the retry contract.</p>
 <h3 id="3-what-if-only-some-notes-were-delivered">3. What if only some notes were delivered?<a aria-label="Link to 3. What if only some notes were delivered?" class="heading-anchor" href="#3-what-if-only-some-notes-were-delivered">#</a></h3>
 <p>Our Hardware contract groups partial delivery into UNKNOWN. That keeps the basic ATM conservative, but it cannot tell a customer how much cash they actually received.</p>
-<p>Suppose we requested three ₹200 notes and the device can prove that two reached the customer. We know ₹400 was delivered, while the hold is still for ₹600. The useful extension is a delivery report with evidence about both customer delivery and cassette movement.</p>
+<p>Suppose we requested three ₹200 notes and the device can prove that two reached the customer. We know ₹400 was delivered, while the hold is still for ₹600. Add PARTIAL to DispenseResult and return a delivery report with evidence about both customer delivery and cassette movement. ALL continues to mean the complete requested bundle was delivered.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">3. What if only some notes were delivered?</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>DeliveryReport
-  outcome: string                       // COMPLETE, PARTIAL, NONE, UNKNOWN
+  outcome: DispenseResult               // extend with PARTIAL
   deliveredNotes: Map&lt;long, int&gt;         // notes confirmed received by customer
   removedFromCassettes: Map&lt;long, int&gt;   // includes notes moved to a reject bin
   journalId: string
@@ -1325,7 +1342,7 @@ Thread A resumes and reads the new session's account
 <li>Why does cancelling an uncertain withdrawal not release the funds?</li>
 <li>Which records must survive a restart before this design can recover safely?</li>
 </ul>
-    <footer class="article-footer"><p>Written by Yash Pandit.</p><a href="#top">↑ Back to top</a></footer></article><aside class="toc" aria-label="On this page"><div class="reading-tools"><button id="focus" aria-pressed="false">◫ &nbsp; Focus</button><button id="expand" aria-pressed="false">Expand comparisons</button></div><div class="progress-label">Reading Progress</div><div class="progress" role="progressbar" aria-label="Reading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div></div></div><h2>On This Page</h2><nav><a href="#understanding-the-problem" class="toc-h2" title="Understanding the Problem">Understanding the Problem</a><a href="#requirements" class="toc-h2" title="Requirements">Requirements</a><a href="#clarifying-questions" class="toc-h3" title="Clarifying Questions">Clarifying Questions</a><a href="#final-requirements" class="toc-h3" title="Final Requirements">Final Requirements</a><a href="#core-entities-and-relationships" class="toc-h2" title="Core Entities and Relationships">Core Entities and Relationships</a><a href="#class-design" class="toc-h2" title="Class Design">Class Design</a><a href="#atm" class="toc-h3" title="ATM">ATM</a><a href="#bankgateway" class="toc-h3" title="BankGateway">BankGateway</a><a href="#cashinventory" class="toc-h3" title="CashInventory">CashInventory</a><a href="#hardware" class="toc-h3" title="Hardware">Hardware</a><a href="#implementation" class="toc-h2" title="Implementation">Implementation</a><a href="#atm_1" class="toc-h3" title="ATM">ATM</a><a href="#cashinventory_1" class="toc-h3" title="CashInventory">CashInventory</a><a href="#bankgateway_1" class="toc-h3" title="BankGateway">BankGateway</a><a href="#hardware_1" class="toc-h3" title="Hardware">Hardware</a><a href="#atmstate" class="toc-h3" title="ATMState">ATMState</a><a href="#verification" class="toc-h3" title="Verification">Verification</a><a href="#complete-reference-implementations" class="toc-h3" title="Complete Code Implementation">Complete Code Implementation</a><a href="#follow-ups" class="toc-h2" title="Follow-ups">Follow-ups</a><a href="#1-what-happens-if-the-process-crashes-after-cash-is-delivered" class="toc-h3" title="1. What happens if the process crashes after cash is delivered?">1. What happens if the process crashes after cash is delivered?</a><a href="#2-how-would-you-support-retries-without-dispensing-twice" class="toc-h3" title="2. How would you support retries without dispensing twice?">2. How would you support retries without dispensing twice?</a><a href="#3-what-if-only-some-notes-were-delivered" class="toc-h3" title="3. What if only some notes were delivered?">3. What if only some notes were delivered?</a><a href="#4-can-we-avoid-holding-the-atm-lock-during-bank-calls" class="toc-h3" title="4. Can we avoid holding the ATM lock during bank calls?">4. Can we avoid holding the ATM lock during bank calls?</a><a href="#5-how-would-cash-refilling-work" class="toc-h3" title="5. How would cash refilling work?">5. How would cash refilling work?</a><a href="#6-what-would-change-if-the-bank-did-not-support-holds" class="toc-h3" title="6. What would change if the bank did not support holds?">6. What would change if the bank did not support holds?</a><a href="#what-is-expected-at-each-level" class="toc-h2" title="What is Expected at Each Level?">What is Expected at Each Level?</a><a href="#test-your-understanding" class="toc-h2" title="Test Your Understanding">Test Your Understanding</a></nav></aside></div></div></main>
+    <footer class="article-footer"><p>Written by Yash Pandit.</p><a href="#top">↑ Back to top</a></footer></article><aside class="toc" aria-label="On this page"><div class="reading-tools"><button id="focus" aria-pressed="false">◫ &nbsp; Focus</button><button id="expand" aria-pressed="false">Expand comparisons</button></div><div class="progress-label">Reading Progress</div><div class="progress" role="progressbar" aria-label="Reading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div></div></div><h2>On This Page</h2><nav><a href="#understanding-the-problem" class="toc-h2" title="Understanding the Problem">Understanding the Problem</a><a href="#requirements" class="toc-h2" title="Requirements">Requirements</a><a href="#clarifying-questions" class="toc-h3" title="Clarifying Questions">Clarifying Questions</a><a href="#final-requirements" class="toc-h3" title="Final Requirements">Final Requirements</a><a href="#core-entities-and-relationships" class="toc-h2" title="Core Entities and Relationships">Core Entities and Relationships</a><a href="#class-design" class="toc-h2" title="Class Design">Class Design</a><a href="#atm" class="toc-h3" title="ATM">ATM</a><a href="#bankgateway" class="toc-h3" title="BankGateway">BankGateway</a><a href="#cashinventory" class="toc-h3" title="CashInventory">CashInventory</a><a href="#hardware" class="toc-h3" title="Hardware">Hardware</a><a href="#implementation" class="toc-h2" title="Implementation">Implementation</a><a href="#atm_1" class="toc-h3" title="ATM">ATM</a><a href="#cashinventory_1" class="toc-h3" title="CashInventory">CashInventory</a><a href="#bankgateway_1" class="toc-h3" title="BankGateway">BankGateway</a><a href="#hardware_1" class="toc-h3" title="Hardware">Hardware</a><a href="#atmstate" class="toc-h3" title="ATMState">ATMState</a><a href="#dispenseresult" class="toc-h3" title="DispenseResult">DispenseResult</a><a href="#verification" class="toc-h3" title="Verification">Verification</a><a href="#complete-reference-implementations" class="toc-h3" title="Complete Code Implementation">Complete Code Implementation</a><a href="#follow-ups" class="toc-h2" title="Follow-ups">Follow-ups</a><a href="#1-what-happens-if-the-process-crashes-after-cash-is-delivered" class="toc-h3" title="1. What happens if the process crashes after cash is delivered?">1. What happens if the process crashes after cash is delivered?</a><a href="#2-how-would-you-support-retries-without-dispensing-twice" class="toc-h3" title="2. How would you support retries without dispensing twice?">2. How would you support retries without dispensing twice?</a><a href="#3-what-if-only-some-notes-were-delivered" class="toc-h3" title="3. What if only some notes were delivered?">3. What if only some notes were delivered?</a><a href="#4-can-we-avoid-holding-the-atm-lock-during-bank-calls" class="toc-h3" title="4. Can we avoid holding the ATM lock during bank calls?">4. Can we avoid holding the ATM lock during bank calls?</a><a href="#5-how-would-cash-refilling-work" class="toc-h3" title="5. How would cash refilling work?">5. How would cash refilling work?</a><a href="#6-what-would-change-if-the-bank-did-not-support-holds" class="toc-h3" title="6. What would change if the bank did not support holds?">6. What would change if the bank did not support holds?</a><a href="#what-is-expected-at-each-level" class="toc-h2" title="What is Expected at Each Level?">What is Expected at Each Level?</a><a href="#test-your-understanding" class="toc-h2" title="Test Your Understanding">Test Your Understanding</a></nav></aside></div></div></main>
     <button id="exit-focus" hidden>◫ Exit focus</button><dialog id="search-dialog"><form method="dialog"><input id="search-input" aria-label="Search sections" placeholder="Search article sections…" autocomplete="off"><button aria-label="Close search">Esc</button></form><nav id="search-results"></nav></dialog><div id="toast" role="status" aria-live="polite"></div><script>(() => {
   const $ = s => document.querySelector(s);
   const $$ = s => [...document.querySelectorAll(s)];

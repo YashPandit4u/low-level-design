@@ -231,11 +231,11 @@ ATM owns this object and allows only one operation to use it at a time. The cons
 
 ```text
 interface Hardware
-  + dispense(notes: Map<long, int>) -> string
+  + dispense(notes: Map<long, int>) -> DispenseResult
   + ejectCard() -> void
 ```
 
-The dispenser reports `ALL` only when the exact bundle reached the customer. `NONE` means no cash was delivered. `UNKNOWN` covers uncertainty and partial delivery. A timeout is also uncertain. Those meanings must come from the hardware adapter, not from guessing based on an exception message.
+`DispenseResult` defines the three delivery outcomes. The dispenser reports `ALL` only when the exact bundle reached the customer. `NONE` means no cash was delivered. `UNKNOWN` covers uncertainty and partial delivery. A timeout is also uncertain. Those meanings must come from the hardware adapter, not from guessing based on an exception message.
 
 ## Implementation
 
@@ -249,9 +249,9 @@ Here is what we will implement:
 - **CashInventory:** implement `plan` in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.
 - **BankGateway:** define authentication, balance inquiry, and hold operations.
 - **Hardware:** define cash delivery and card ejection.
-- **ATMState:** define the allowed states.
+- **ATMState and DispenseResult:** define the allowed states and delivery outcomes.
 
-We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.
+We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state and delivery-result enums. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.
 
 The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the **Core logic** and **Edge cases** before the steps. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.
 
@@ -416,12 +416,12 @@ article += sketch("""withdraw(amount)
                 return DECLINED
 
             outcome = hardware.dispense(copy(plan))
-            if outcome == NONE
+            if outcome == DispenseResult.NONE
                 bank.release(operationId)
                 pending = null
                 return NOT_DISPENSED
 
-            if outcome != ALL
+            if outcome != DispenseResult.ALL
                 endSession(true)
                 return PENDING_REVIEW
 
@@ -589,7 +589,7 @@ The hardware adapter must also avoid calling ATM methods while ATM holds its loc
 
 '''
 article += sketch("""interface Hardware
-    dispense(notes) -> ALL, NONE, or UNKNOWN
+    dispense(notes) -> DispenseResult
     ejectCard()""")
 article += '''
 ### ATMState
@@ -602,6 +602,16 @@ article += sketch("""enum ATMState
     PIN_REQUIRED
     READY
     OUT_OF_SERVICE""")
+article += '''
+### DispenseResult
+
+DispenseResult names the delivery outcomes returned by Hardware. ATM uses these enum values to decide whether to capture, release, or retain the bank hold for review.
+
+'''
+article += sketch("""enum DispenseResult
+    ALL
+    NONE
+    UNKNOWN""")
 article += '''
 ### Verification
 
@@ -802,11 +812,11 @@ Keep completed IDs long enough to cover the supported retry window. Deleting a r
 
 Our Hardware contract groups partial delivery into UNKNOWN. That keeps the basic ATM conservative, but it cannot tell a customer how much cash they actually received.
 
-Suppose we requested three ₹200 notes and the device can prove that two reached the customer. We know ₹400 was delivered, while the hold is still for ₹600. The useful extension is a delivery report with evidence about both customer delivery and cassette movement.
+Suppose we requested three ₹200 notes and the device can prove that two reached the customer. We know ₹400 was delivered, while the hold is still for ₹600. Add PARTIAL to DispenseResult and return a delivery report with evidence about both customer delivery and cassette movement. ALL continues to mean the complete requested bundle was delivered.
 
 ```text
 DeliveryReport
-  outcome: string                       // COMPLETE, PARTIAL, NONE, UNKNOWN
+  outcome: DispenseResult               // extend with PARTIAL
   deliveredNotes: Map<long, int>         // notes confirmed received by customer
   removedFromCassettes: Map<long, int>   // includes notes moved to a reject bin
   journalId: string

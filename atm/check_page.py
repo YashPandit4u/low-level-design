@@ -63,6 +63,7 @@ import test_atm
 test_atm.ATM = namespace['ATM']
 test_atm.CashInventory = namespace['CashInventory']
 test_atm.ATMState = namespace['ATMState']
+test_atm.DispenseResult = namespace['DispenseResult']
 result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_atm))
 assert result.wasSuccessful()
 with tempfile.TemporaryDirectory(prefix='atm-article-') as folder:

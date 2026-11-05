@@ -2,7 +2,7 @@ import itertools
 import unittest
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from threading import Event
-from atm import ATM, ATMState, CashInventory
+from atm import ATM, ATMState, DispenseResult, CashInventory
 
 
 class FakeBank:
@@ -42,7 +42,7 @@ class FakeBank:
 
 class FakeHardware:
     def __init__(self):
-        self.outcome = 'ALL'
+        self.outcome = DispenseResult.ALL
         self.dispensed = []
         self.ejections = 0
         self.eject_fails = False
@@ -162,14 +162,14 @@ class ATMTest(unittest.TestCase):
 
     def test_no_cash_releases_hold(self):
         self.login()
-        self.hardware.outcome = 'NONE'
+        self.hardware.outcome = DispenseResult.NONE
         self.assertEqual(self.atm.withdraw(20000), 'NOT_DISPENSED')
         self.assertEqual(self.bank.holds, {})
         self.assertEqual(self.bank.funds, 100000)
         self.assertEqual(self.atm._cash._notes[20000], 3)
 
     def test_unknown_and_timeout_never_release_hold(self):
-        for outcome in ['UNKNOWN', 'TIMEOUT', 'unexpected']:
+        for outcome in [DispenseResult.UNKNOWN, 'TIMEOUT', 'unexpected']:
             with self.subTest(outcome=outcome):
                 self.setUp()
                 self.login()
@@ -184,7 +184,7 @@ class ATMTest(unittest.TestCase):
 
     def test_uncertain_withdrawal_and_failed_ejection_preserve_pending(self):
         self.login()
-        self.hardware.outcome = 'UNKNOWN'
+        self.hardware.outcome = DispenseResult.UNKNOWN
         self.hardware.eject_fails = True
         self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
         state, pending = (self.atm._state, self.atm._pending)
@@ -208,7 +208,7 @@ class ATMTest(unittest.TestCase):
                 self.setUp()
                 self.login()
                 self.bank.fail = stage
-                self.hardware.outcome = 'NONE' if stage == 'release' else 'ALL'
+                self.hardware.outcome = DispenseResult.NONE if stage == 'release' else DispenseResult.ALL
                 self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
                 self.assertEqual(self.atm._state, ATMState.OUT_OF_SERVICE)
                 self.assertIsNotNone(self.atm._pending)
@@ -220,7 +220,7 @@ class ATMTest(unittest.TestCase):
                 self.setUp()
                 self.login()
                 self.bank.fail = stage
-                self.hardware.outcome = 'ALL' if stage == 'capture_after' else 'NONE'
+                self.hardware.outcome = DispenseResult.ALL if stage == 'capture_after' else DispenseResult.NONE
                 self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
                 state, pending = (self.atm._state, self.atm._pending)
                 self.assertEqual(state, ATMState.OUT_OF_SERVICE)
@@ -262,7 +262,7 @@ class ATMTest(unittest.TestCase):
         self.assertEqual(self.bank.funds, 80000)
 
     def test_cancel_waits_for_dispensing(self):
-        for outcome in ['ALL', 'UNKNOWN']:
+        for outcome in [DispenseResult.ALL, DispenseResult.UNKNOWN]:
             with self.subTest(outcome=outcome):
                 self.setUp()
                 entered, finish, cancelling = Event(), Event(), Event()
@@ -285,14 +285,14 @@ class ATMTest(unittest.TestCase):
                         self.assertEqual(self.hardware.ejections, 0)
                     finally:
                         finish.set()
-                    self.assertEqual(withdrawal.result(2), 'SUCCESS' if outcome == 'ALL' else 'PENDING_REVIEW')
+                    self.assertEqual(withdrawal.result(2), 'SUCCESS' if outcome == DispenseResult.ALL else 'PENDING_REVIEW')
                     cancellation.result(2)
                 self.assertEqual(self.hardware.ejections, 1)
                 state, pending = (self.atm._state, self.atm._pending)
-                self.assertEqual(state, ATMState.IDLE if outcome == 'ALL' else ATMState.OUT_OF_SERVICE)
-                self.assertEqual(pending is None, outcome == 'ALL')
-                self.assertEqual(self.bank.funds, 80000 if outcome == 'ALL' else 100000)
-                self.assertEqual(bool(self.bank.holds), outcome == 'UNKNOWN')
+                self.assertEqual(state, ATMState.IDLE if outcome == DispenseResult.ALL else ATMState.OUT_OF_SERVICE)
+                self.assertEqual(pending is None, outcome == DispenseResult.ALL)
+                self.assertEqual(self.bank.funds, 80000 if outcome == DispenseResult.ALL else 100000)
+                self.assertEqual(bool(self.bank.holds), outcome == DispenseResult.UNKNOWN)
 
     def test_new_session_uses_new_authenticated_account(self):
         seen = []

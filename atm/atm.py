@@ -13,6 +13,12 @@ class ATMState(Enum):
     OUT_OF_SERVICE = "OUT_OF_SERVICE"
 
 
+class DispenseResult(Enum):
+    ALL = "ALL"
+    NONE = "NONE"
+    UNKNOWN = "UNKNOWN"
+
+
 class BankGateway(Protocol):
     def authenticate(self, card_id: str, pin: str) -> str | None:
         """Return an account ID, or None for a rejected card/PIN."""
@@ -34,7 +40,7 @@ class BankGateway(Protocol):
 
 
 class Hardware(Protocol):
-    def dispense(self, notes: dict[int, int]) -> str:
+    def dispense(self, notes: dict[int, int]) -> DispenseResult:
         """ALL: exact bundle delivered. NONE: no cash left the machine.
         UNKNOWN: delivery is uncertain, including partial delivery.
         """
@@ -147,11 +153,11 @@ class ATM:
                     self._pending = None
                     return "DECLINED"
                 outcome = self._hardware.dispense(dict(plan))
-                if outcome == "NONE":
+                if outcome == DispenseResult.NONE:
                     self._bank.release(operation_id)
                     self._pending = None
                     return "NOT_DISPENSED"
-                if outcome != "ALL":
+                if outcome != DispenseResult.ALL:
                     self._end_session(out_of_service=True)
                     return "PENDING_REVIEW"
                 self._cash.record_dispensed(plan)

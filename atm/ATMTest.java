@@ -32,12 +32,13 @@ public final class ATMTest {
         }
     }
     static class Device implements ATM.Hardware {
-        String outcome = "ALL";
+        ATM.DispenseResult outcome = ATM.DispenseResult.ALL;
+        boolean timeout;
         int calls, ejections;
         boolean ejectFails;
-        public String dispense(Map<Long, Integer> notes) {
+        public ATM.DispenseResult dispense(Map<Long, Integer> notes) {
             calls++;
-            if (outcome.equals("TIMEOUT")) throw new RuntimeException();
+            if (timeout) throw new RuntimeException();
             return outcome;
         }
         public void ejectCard() {
@@ -146,7 +147,7 @@ public final class ATMTest {
             CountDownLatch cancelling = new CountDownLatch(1);
             Bank bank = new Bank();
             Device device = new Device() {
-                public String dispense(Map<Long, Integer> notes) {
+                public ATM.DispenseResult dispense(Map<Long, Integer> notes) {
                     entered.countDown();
                     try {
                         if (!finish.await(2, TimeUnit.SECONDS)) throw new AssertionError();
@@ -154,7 +155,7 @@ public final class ATMTest {
                         Thread.currentThread().interrupt();
                         throw new RuntimeException(e);
                     }
-                    return deliveryResult;
+                    return ATM.DispenseResult.valueOf(deliveryResult);
                 }
             };
             ATM atm = ready(bank, device);
@@ -220,7 +221,7 @@ public final class ATMTest {
     static void uncertainWithdrawalWithStuckCard() {
         Bank bank = new Bank(); Device device = new Device();
         ATM atm = ready(bank, device);
-        device.outcome = "UNKNOWN";
+        device.outcome = ATM.DispenseResult.UNKNOWN;
         device.ejectFails = true;
         check(atm.withdraw(20000).equals("PENDING_REVIEW"));
         String pending = pending(atm);
@@ -256,7 +257,8 @@ public final class ATMTest {
 
         for (String outcome : List.of("NONE", "UNKNOWN", "TIMEOUT")) {
             bank = new Bank(); device = new Device(); atm = ready(bank, device);
-            device.outcome = outcome;
+            device.timeout = outcome.equals("TIMEOUT");
+            device.outcome = device.timeout ? ATM.DispenseResult.UNKNOWN : ATM.DispenseResult.valueOf(outcome);
             String result = atm.withdraw(20000);
             if (outcome.equals("NONE")) {
                 check(result.equals("NOT_DISPENSED") && bank.holds.isEmpty());
@@ -271,7 +273,7 @@ public final class ATMTest {
         for (String stage : List.of("hold", "capture", "release")) {
             bank = new Bank(); device = new Device(); atm = ready(bank, device);
             bank.fail = stage;
-            if (stage.equals("release")) device.outcome = "NONE";
+            if (stage.equals("release")) device.outcome = ATM.DispenseResult.NONE;
             check(atm.withdraw(20000).equals("PENDING_REVIEW"));
             check(pending(atm) != null && state(atm).equals(ATM.ATMState.OUT_OF_SERVICE));
             check(stock(atm).get(20000L) == (stage.equals("capture") ? 2 : 3));
@@ -291,7 +293,7 @@ public final class ATMTest {
             bank = new Bank(); device = new Device(); atm = ready(bank, device);
             bank.fail = stage;
             boolean delivered = stage.equals("capture_after");
-            device.outcome = delivered ? "ALL" : "NONE";
+            device.outcome = delivered ? ATM.DispenseResult.ALL : ATM.DispenseResult.NONE;
             check(atm.withdraw(20000).equals("PENDING_REVIEW"));
             check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE) && pending(atm) != null);
             check(bank.holds.isEmpty() && bank.funds == (delivered ? 80000 : 100000));

@@ -6,6 +6,10 @@ public final class ATM {
         IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
     }
 
+    public enum DispenseResult {
+        ALL, NONE, UNKNOWN
+    }
+
     public interface BankGateway {
         String authenticate(String cardId, String pin); // null means rejected
         long availableBalance(String accountId);
@@ -17,7 +21,7 @@ public final class ATM {
     public interface Hardware {
         // ALL: exact bundle delivered. NONE: nothing delivered.
         // UNKNOWN: uncertain or partial delivery.
-        String dispense(Map<Long, Integer> notes);
+        DispenseResult dispense(Map<Long, Integer> notes);
         void ejectCard();
     }
 
@@ -131,13 +135,13 @@ public final class ATM {
                 pending = null;
                 return "DECLINED";
             }
-            String outcome = hardware.dispense(Map.copyOf(plan));
-            if ("NONE".equals(outcome)) {
+            DispenseResult outcome = hardware.dispense(Map.copyOf(plan));
+            if (outcome == DispenseResult.NONE) {
                 bank.release(operationId);
                 pending = null;
                 return "NOT_DISPENSED";
             }
-            if (!"ALL".equals(outcome)) {
+            if (outcome != DispenseResult.ALL) {
                 endSession(true);
                 return "PENDING_REVIEW";
             }
