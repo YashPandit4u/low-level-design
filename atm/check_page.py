@@ -23,6 +23,13 @@ assert len(soup.select('.requirements-panel')) == 1
 assert not soup.select('.toc a[href="#withdraw"]')
 assert soup.find(id='verification').find_previous('h2')['id'] == 'implementation'
 assert 'Splitwise' not in soup.get_text()
+implementation_headings = []
+for heading in soup.find(id='implementation').find_all_next(['h2', 'h3']):
+    if heading.name == 'h2':
+        break
+    implementation_headings.append(heading['id'])
+assert implementation_headings[:5] == ['atm_1', 'cashinventory_1', 'bankgateway_1', 'hardware_1', 'atmstate'], 'Implementation must proceed from ATM to its dependencies'
+
 # Group displayed excerpts by their owning class, not by panel position.
 def excerpts(language):
     sections = {}

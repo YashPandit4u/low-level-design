@@ -270,123 +270,19 @@ The two methods worth spending most of our interview time on are `CashInventory.
 
 Here is what we will implement:
 
-- **ATMState:** define the allowed states.
+- **ATM:** implement card entry, PIN checks, balance inquiry, withdrawal, and cancellation.
+- **CashInventory:** implement `plan` in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.
 - **BankGateway:** define authentication, balance inquiry, and hold operations.
 - **Hardware:** define cash delivery and card ejection.
-- **CashInventory:** implement `plan` in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.
-- **ATM:** implement card entry, PIN checks, balance inquiry, withdrawal, and cancellation.
+- **ATMState:** define the allowed states.
 
-We'll build the dependencies first, then use them in ATM. Each method shown under a class belongs to that class. The complete files below put the methods and imports together.
+We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the code.
 
 For important operations, we'll explain the **Core logic** and **Edge cases** before the code. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.
 
-### ATMState
-
-Define the four states used by ATM. Python imports `Enum` from the standard library. The ATM methods will use these values when checking and changing state.
-
-'''
-article += pair(py_class('ATMState'), java_block('public enum ATMState'))
-article += '''
-### BankGateway
-
-The bank interface provides authentication, available-balance inquiry, and hold operations. Authentication returns an account ID or a rejected result. A rejected hold returns false, while an exception leaves its outcome uncertain.
-
-Each adapter call waits for a result or times out. The bank adapter must not call ATM methods while ATM is waiting for it, because ATM still holds the lock.
-
-'''
-article += pair(py_class('BankGateway'), java_block('public interface BankGateway'))
-article += '''
-### Hardware
-
-The hardware interface handles dispensing and card ejection. `dispense` reports ALL, NONE, or UNKNOWN according to the delivery guarantees defined above. A timeout does not prove that the external action stopped. Failed ejection raises an error so ATM can take the machine out of service.
-
-The hardware adapter must also avoid calling ATM methods while ATM holds its lock.
-
-'''
-article += pair(py_class('Hardware'), java_block('public interface Hardware'))
-article += '''
-### CashInventory
-
-Start with the stock we were given at startup. The constructor rejects nonpositive denominations and negative counts. Zero counts are valid: a cassette may be empty. Copy the map so later changes to the caller's configuration cannot change the ATM's stock.
-
-'''
-article += pair(py_methods(['__init__'], 'CashInventory'),
-                'private final Map<Long, Integer> notes;\n\n' + java_block('CashInventory(Map'))
-article += '''
-**Planning the bundle**
-
-Let's decide how to choose notes. Suppose the ATM has one ₹500 note and three ₹200 notes. A customer asks for ₹600. Taking ₹500 first gets stuck, but three ₹200 notes work.
-
-#### Bad Solution: Take the largest note and never reconsider
-
-Greedy selection is short, but it rejects that valid ₹600 withdrawal. Checking total cash first does not fix the problem. We need a combination that respects both denominations and counts.
-
-#### Great Solution: Try bounded combinations
-
-Try the largest useful count of a denomination, then smaller counts if the remaining amount cannot be made. Each denomination has a fixed stock limit. Remember failed searches so we do not repeat them. This works well for a small set of note denominations and a limited withdrawal amount.
-
-#### Good Solution: Build a dynamic programming table
-
-A table can record which amounts are reachable and reconstruct a bundle. This can work well when the range of possible amounts is small. We also need to track how many notes of each denomination are available. We do not need it for this walkthrough.
-
-**Implementing `plan`**
-
-ATM has already checked that the amount is positive and within the withdrawal limit. The planner only needs to solve the note-selection problem.
-
-**Core logic:**
-
-1. Visit denominations from largest to smallest.
-2. Try a count no larger than the stock or the remaining amount allows.
-3. Ask whether the smaller denominations can make the remainder.
-4. Return the first complete bundle. Return no plan if every choice fails.
-
-**Edge cases:**
-
-- Enough total money but no exact bundle: return no plan.
-- A denomination is exhausted: try zero notes of that denomination.
-- A larger-note choice gets stuck: try fewer of those notes.
-- Planning fails: leave every count unchanged.
-
-`plan` sorts the denominations and starts the search. Its helper, `find_bundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed returns `None` in Python or `null` in Java.
-
-As a successful search returns, each level adds its chosen notes to that map. The code checks `is not None`, rather than whether the map is nonempty, because an empty map is a valid success at the end of the search.
-
-The `failed` set remembers combinations of index and remaining amount that could not work. For example, after proving that the smaller notes cannot make ₹100, another path does not need to repeat that search. This cache belongs to one planning call because stock may change before the next withdrawal.
-
-Why is the cache key just `(index, remaining)`? Earlier choices used only larger denominations. They did not change the stock of any denomination still ahead of us. The same index and remainder therefore describe the same remaining problem within this call.
-
-Walk through our ₹600 example before reading the code:
-
-```text
-Available: one ₹500 note, three ₹200 notes
-Need: ₹600
-
-Try one ₹500 note -> ₹100 remains
-  ₹200 cannot fit -> no bundle
-Try zero ₹500 notes -> ₹600 remains
-  Try three ₹200 notes -> ₹0 remains -> success
-Return {20000: 3} in paise. Stock is still unchanged.
-```
-
-Trying zero is essential. Without that choice, the search would never discover a bundle made entirely from smaller notes.
-
-This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.
-
-'''
-article += pair(py_methods(['plan'], 'CashInventory'),
-                java_block('Map<Long, Integer> plan') + '\n\n' + java_block('private Map<Long, Integer> findBundle'))
-article += '''
-**Recording delivery**
-
-`record_dispensed` is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of `{20000: 3}`, it subtracts three from the ₹200 count. Planning alone never calls this method.
-
-'''
-article += pair(py_methods(['record_dispensed'], 'CashInventory'),
-                java_block('void recordDispensed'))
-article += '''
 ### ATM
 
-Start with the constructor. It receives the two adapters, the initial cash stock, and a withdrawal limit. It creates its own inventory and begins without a card or account. The default Python limit is ₹20,000, written as `2000000` paise.
+Start with the constructor. It receives the two adapters, the initial cash stock, and a withdrawal limit. We already designed their interfaces above, so we can follow the ATM flow before filling in those dependencies. It creates its own inventory and begins without a card or account. The default Python limit is ₹20,000, written as `2000000` paise.
 
 All public operations use the same lock. One physical ATM serves one session at a time, so serial execution is a reasonable starting point. This lock protects local session and cash state. The bank must still protect the account across other ATMs.
 
@@ -490,6 +386,110 @@ Cancellation ends a session waiting for a PIN or ready for operations. It does n
 
 '''
 article += pair(py_methods(['cancel','_end_session']),java_block('public synchronized void cancel')+'\n\n'+java_block('private void endSession'))
+article += '''
+### CashInventory
+
+Start with the stock we were given at startup. The constructor rejects nonpositive denominations and negative counts. Zero counts are valid: a cassette may be empty. Copy the map so later changes to the caller's configuration cannot change the ATM's stock.
+
+'''
+article += pair(py_methods(['__init__'], 'CashInventory'),
+                'private final Map<Long, Integer> notes;\n\n' + java_block('CashInventory(Map'))
+article += '''
+**Planning the bundle**
+
+Let's decide how to choose notes. Suppose the ATM has one ₹500 note and three ₹200 notes. A customer asks for ₹600. Taking ₹500 first gets stuck, but three ₹200 notes work.
+
+#### Bad Solution: Take the largest note and never reconsider
+
+Greedy selection is short, but it rejects that valid ₹600 withdrawal. Checking total cash first does not fix the problem. We need a combination that respects both denominations and counts.
+
+#### Great Solution: Try bounded combinations
+
+Try the largest useful count of a denomination, then smaller counts if the remaining amount cannot be made. Each denomination has a fixed stock limit. Remember failed searches so we do not repeat them. This works well for a small set of note denominations and a limited withdrawal amount.
+
+#### Good Solution: Build a dynamic programming table
+
+A table can record which amounts are reachable and reconstruct a bundle. This can work well when the range of possible amounts is small. We also need to track how many notes of each denomination are available. We do not need it for this walkthrough.
+
+**Implementing `plan`**
+
+ATM has already checked that the amount is positive and within the withdrawal limit. The planner only needs to solve the note-selection problem.
+
+**Core logic:**
+
+1. Visit denominations from largest to smallest.
+2. Try a count no larger than the stock or the remaining amount allows.
+3. Ask whether the smaller denominations can make the remainder.
+4. Return the first complete bundle. Return no plan if every choice fails.
+
+**Edge cases:**
+
+- Enough total money but no exact bundle: return no plan.
+- A denomination is exhausted: try zero notes of that denomination.
+- A larger-note choice gets stuck: try fewer of those notes.
+- Planning fails: leave every count unchanged.
+
+`plan` sorts the denominations and starts the search. Its helper, `find_bundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed returns `None` in Python or `null` in Java.
+
+As a successful search returns, each level adds its chosen notes to that map. The code checks `is not None`, rather than whether the map is nonempty, because an empty map is a valid success at the end of the search.
+
+The `failed` set remembers combinations of index and remaining amount that could not work. For example, after proving that the smaller notes cannot make ₹100, another path does not need to repeat that search. This cache belongs to one planning call because stock may change before the next withdrawal.
+
+Why is the cache key just `(index, remaining)`? Earlier choices used only larger denominations. They did not change the stock of any denomination still ahead of us. The same index and remainder therefore describe the same remaining problem within this call.
+
+Walk through our ₹600 example before reading the code:
+
+```text
+Available: one ₹500 note, three ₹200 notes
+Need: ₹600
+
+Try one ₹500 note -> ₹100 remains
+  ₹200 cannot fit -> no bundle
+Try zero ₹500 notes -> ₹600 remains
+  Try three ₹200 notes -> ₹0 remains -> success
+Return {20000: 3} in paise. Stock is still unchanged.
+```
+
+Trying zero is essential. Without that choice, the search would never discover a bundle made entirely from smaller notes.
+
+This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.
+
+'''
+article += pair(py_methods(['plan'], 'CashInventory'),
+                java_block('Map<Long, Integer> plan') + '\n\n' + java_block('private Map<Long, Integer> findBundle'))
+article += '''
+**Recording delivery**
+
+`record_dispensed` is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of `{20000: 3}`, it subtracts three from the ₹200 count. Planning alone never calls this method.
+
+'''
+article += pair(py_methods(['record_dispensed'], 'CashInventory'),
+                java_block('void recordDispensed'))
+article += '''
+### BankGateway
+
+The bank interface provides authentication, available-balance inquiry, and hold operations. Authentication returns an account ID or a rejected result. A rejected hold returns false, while an exception leaves its outcome uncertain.
+
+Each adapter call waits for a result or times out. The bank adapter must not call ATM methods while ATM is waiting for it, because ATM still holds the lock.
+
+'''
+article += pair(py_class('BankGateway'), java_block('public interface BankGateway'))
+article += '''
+### Hardware
+
+The hardware interface handles dispensing and card ejection. `dispense` reports ALL, NONE, or UNKNOWN according to the delivery guarantees defined above. A timeout does not prove that the external action stopped. Failed ejection raises an error so ATM can take the machine out of service.
+
+The hardware adapter must also avoid calling ATM methods while ATM holds its lock.
+
+'''
+article += pair(py_class('Hardware'), java_block('public interface Hardware'))
+article += '''
+### ATMState
+
+Define the four states used by ATM. Python imports `Enum` from the standard library. The ATM methods will use these values when checking and changing state.
+
+'''
+article += pair(py_class('ATMState'), java_block('public enum ATMState'))
 article += '''
 ### Verification
 
