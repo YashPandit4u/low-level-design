@@ -923,29 +923,213 @@ Download [atm.py](atm.py) or [ATM.java](ATM.java).
 
 ## Follow-ups
 
-**What happens if the process crashes after cash is delivered?**
+An interviewer may now change one of our assumptions. Start by explaining where the current design falls short, then name the fields or methods you would change. A short answer is often enough. The examples below go further so you can work through the details if asked.
 
-Our pending ID is only in memory, so a crash loses it. Before creating the hold, save the operation ID, account ID, amount, and planned notes to persistent storage. Save each confirmed outcome and the ID of the dispenser's stored transaction record. The account and amount must remain available after the session is cleared. After restarting, compare the bank and dispenser records before accepting more withdrawals. A database rollback cannot take cash back from a customer.
+### 1. What happens if the process crashes after cash is delivered?
 
-**How would you support retries?**
+Suppose a customer withdraws ₹600. The bank creates the hold, the dispenser hands over three ₹200 notes, and the process crashes before calling `capture`. Our in-memory `pending` field disappears. On restart, the constructor loads its initial note counts and starts in IDLE. Both choices are unsafe after this crash. We could reuse notes that have left the machine or leave the customer's hold unresolved.
 
-Give the withdrawal a stable request ID before the first attempt. Store its amount, account, and result. Repeating that ID must return or resume the same operation, not dispense again. The bank and hardware must recognize repeated IDs or let us check an earlier result. That is what makes a retry safe. Giving every retry a new ID would make it look like another withdrawal.
+The missing piece is a withdrawal record that survives the process. ATM already coordinates every step, so it is the place to record progress. CashInventory continues to choose notes, and the bank continues to own account funds.
 
-**What if only some notes were delivered?**
+> I would save the withdrawal before contacting the bank and record each confirmed outcome. On restart, I would keep the machine unavailable while comparing unfinished withdrawals with the bank and dispenser records. I would use the original operation ID to finish the existing withdrawal.
 
-Treat that as UNKNOWN in the current interface. A richer adapter can report the exact delivered bundle when the hardware can prove it. After checking those records, settle only the amount delivered and correct the note counts. Do not release the whole hold merely because the requested bundle was incomplete.
+The record needs enough information to investigate after the card and account fields have been cleared.
 
-**Can we avoid holding a lock during bank calls?**
+```text
+WithdrawalRecord
+  operationId: string
+  accountId: string
+  amount: long                          // paise
+  plannedNotes: Map<long, int>
+  phase: WithdrawalPhase
+  result: string | null
 
-Yes, but we need an explicit in-progress operation and rules for what other requests can do during it. Holding one lock is easy to reason about for one physical customer session. The trade-off is that balance and cancellation calls wait behind a slow operation. A production controller would keep the screen responsive while refusing conflicting money operations.
+WithdrawalPhase
+  CREATED, HOLD_REQUESTED, HELD, DISPENSE_REQUESTED,
+  DELIVERED, NOT_DELIVERED, COMPLETED, NEEDS_REVIEW
+```
 
-**How would cash refilling work?**
+Save a request phase **before** making the corresponding external call. Save its confirmed outcome afterward. For example, persist DISPENSE_REQUESTED before asking Hardware to dispense, then DELIVERED only after confirmed delivery. If the process dies between those writes, the record tells us delivery may have happened.
 
-Only allow it in a maintenance state with no unresolved withdrawal. Check the physical note counts, then update the inventory under the ATM lock. An operator should not simply switch OUT_OF_SERVICE to IDLE while an uncertain hold or dispensing result remains.
+That gap cannot be closed with a database transaction around `dispense`. The dispenser is a separate physical device. We need to pass the operation ID to an extended hardware adapter and ask it for a durable delivery result after restart. The bank needs a matching operation-status lookup.
 
-**What would change without bank holds?**
+| Recovery evidence | Next action |
+| --- | --- |
+| Bank hold exists and hardware proves full delivery | Finish capture using the original ID. |
+| Bank hold exists and hardware proves the command delivered nothing and cannot deliver later | Release the hold. |
+| Bank already captured the withdrawal | Record that result without another debit. |
+| Hardware cannot establish the delivery outcome | Keep the ATM out of service and retain the record for review. |
 
-The bank adapter might instead offer a debit with a reversal reference. The same uncertainty rule still applies: a reversal is appropriate only when the system has evidence that cash was not delivered. The protocol must define status queries, retries, and reconciliation. Do not quietly replace a hold with a local balance check.
+A missing hardware record alone may be inconclusive. A command could still be in flight, or the journal could be unavailable. We need a device guarantee before treating that as non-delivery.
+
+There is a second recovery problem. A crash can happen after inventory is reduced but before completion is saved. Replaying that update would subtract the same notes twice. Store inventory updates with the operation ID and apply each once, or rebuild counts from a reconciled hardware journal and physical count. The startup configuration is no longer the source of truth after the machine has served customers.
+
+This adds storage writes and recovery coordination to the withdrawal path. In an interview, the main points are the durable record, the uncertain gap around each external call, and a clear rule for when the machine can serve customers again.
+
+### 2. How would you support retries without dispensing twice?
+
+Imagine the controller submits a withdrawal, cash is delivered, and the response to the controller is lost. It submits the same request again. Our current `withdraw(amount)` creates a fresh operation ID for every accepted call, so that second call would look like another withdrawal.
+
+The controller must create an ID when the customer confirms the withdrawal and reuse it when retrying that submission. A deliberate second withdrawal gets a new ID. This changes the public method only when retry support becomes a requirement.
+
+```text
+ATM
+  + withdraw(requestId: string, amount: long) -> string
+```
+
+> I would look up the request before starting any money operation. If it already completed, I would return the stored result. If it is still running or uncertain, I would return PENDING_REVIEW or an in-progress result. I would also check that the ID still refers to the same account and amount.
+
+Use the durable withdrawal record from the previous follow-up. The lookup and creation must be atomic so two threads cannot both claim a new ID.
+
+```text
+At withdrawal admission, while holding the ATM lock
+  require an authenticated session
+  record = store.find(requestId)
+  if record exists
+    require record.accountId == currentAccount
+    require record.amount == amount
+    return record.result if completed, otherwise PENDING_REVIEW
+
+  require the machine is ready for a new withdrawal
+  validate amount and plan notes
+  store.insertUnique(requestId, currentAccount, amount, plannedNotes)
+  // Only the caller that created the record starts the withdrawal.
+```
+
+The stored account prevents another customer's session from reusing the ID to retrieve or execute that withdrawal. The pending record also keeps the machine unavailable to competing money operations.
+
+Application deduplication solves only one part. If the bank captures successfully and its reply is lost, a retry must not post another debit. Give bank operations a documented repeat-by-ID contract. The hardware needs durable deduplication of `dispense(operationId, notes)`, or a status lookup that conclusively resolves the earlier command. If it offers neither, an uncertain dispense must stay pending for review.
+
+For the ₹600 example, repeating request `W1` after SUCCESS returns W1's saved result. While delivery is uncertain, the current ATM ends the session and stays out of service. It rejects the retry until recovery resolves the withdrawal and the customer authenticates again. Reusing W1 for ₹800 is rejected.
+
+Keep completed IDs long enough to cover the supported retry window. Deleting a record too early allows an old request to look new. That retention policy is part of the retry contract.
+
+### 3. What if only some notes were delivered?
+
+Our Hardware contract groups partial delivery into UNKNOWN. That keeps the basic ATM conservative, but it cannot tell a customer how much cash they actually received.
+
+Suppose we requested three ₹200 notes and the device can prove that two reached the customer. We know ₹400 was delivered, while the hold is still for ₹600. The useful extension is a delivery report with evidence about both customer delivery and cassette movement.
+
+```text
+DeliveryReport
+  outcome: string                       // COMPLETE, PARTIAL, NONE, UNKNOWN
+  deliveredNotes: Map<long, int>         // notes confirmed received by customer
+  removedFromCassettes: Map<long, int>   // includes notes moved to a reject bin
+  journalId: string
+```
+
+Those two maps answer different questions. Delivered notes determine the amount to debit. Notes removed from cassettes determine which notes can still be dispensed. A note trapped inside the machine may be unavailable even though the customer never received it.
+
+> I would extend Hardware to return the confirmed bundle. ATM would calculate the delivered amount and ask the bank to capture that amount from the hold. CashInventory would apply the confirmed cassette changes. If either amount is uncertain, I would keep the withdrawal pending.
+
+This also requires a bank contract change. Our existing `capture(operationId)` captures the entire hold. For partial delivery, we need a settlement operation that captures the delivered amount and releases the unused portion of the reservation.
+
+```text
+BankGateway
+  + settleHold(operationId: string, deliveredAmount: long) -> void
+```
+
+For this extension, `settleHold` must validate that the delivered amount is within the hold, support safe repetition by ID, and reject a conflicting amount for an already settled operation.
+
+```text
+Requested amount        60000 paise
+Confirmed delivered     {20000: 2}
+Amount to capture       40000 paise
+Unused hold to release  20000 paise
+```
+
+The ATM should remain out of service after partial delivery until the device fault and stock are checked. Knowing the delivered amount resolves the money question, but the dispenser may still be jammed. If the report itself is uncertain, avoid calculating a refund from an estimate.
+
+The added report is justified when the hardware can provide reliable evidence. A richer object cannot create certainty that the device does not have.
+
+### 4. Can we avoid holding the ATM lock during bank calls?
+
+In the current implementation, `withdraw` holds the lock from validation through completion. A slow bank call also blocks cancellation and balance inquiry. Releasing the lock around the network call sounds straightforward, but it creates a new race.
+
+```text
+Thread A plans a withdrawal and releases the lock
+Thread B cancels the session and inserts another card
+Thread A resumes and reads the new session's account
+```
+
+The withdrawal must keep the account and notes it was accepted with. It must also claim the machine before releasing the lock.
+
+> I would add a WITHDRAWING state and retain one active operation. Under the lock, I would validate the session, copy the account and plan into that operation, and mark the machine busy. External calls would use that saved data. I would reacquire the lock to apply the result.
+
+```text
+ATM gains
+  state: ATMState                       // add WITHDRAWING
+  activeOperation: WithdrawalRecord | null
+  endSessionAfterWithdrawal: boolean
+```
+
+The operation belongs to ATM and contains the account, amount, and note plan. Each external step uses that record rather than reading the current session again.
+
+```text
+1. Under lock
+   Validate the session and amount
+   Plan notes, create activeOperation, set WITHDRAWING
+
+2. Outside lock
+   Perform hold, dispense, and the appropriate bank settlement
+   Use activeOperation's saved inputs and record each confirmed outcome
+
+3. Under lock
+   Verify the result belongs to the active operation
+   Apply confirmed inventory changes exactly once
+   Finish in READY or OUT_OF_SERVICE
+   Honor a queued request to end the session
+```
+
+While WITHDRAWING, another withdrawal, card insertion, and maintenance request must fail. Cancellation can set `endSessionAfterWithdrawal` and return promptly. It cannot eject immediately or release a hold while dispensing may be underway. After a known outcome, finish the money operation and end the session. After uncertainty, stop the machine and retain the operation for review.
+
+This version also needs an explicit rule for balance inquiry. The simplest choice is to reject it while a withdrawal is active. If the product needs live balance updates, define their account and timing semantics separately.
+
+The trade-off is more coordination code and more transitions to test. For a single-customer ATM, the current lock is a reasonable interview choice. Split the lock scope when responsiveness is an explicit requirement.
+
+### 5. How would cash refilling work?
+
+The constructor currently accepts note counts once. Adding a public `addNotes` method would let someone change inventory while a withdrawal is using a plan, or put a faulty machine back online before an unresolved withdrawal is checked.
+
+Cash refilling needs a maintenance flow. Add MAINTENANCE to ATMState and expose maintenance operations to the operator-side component when that requirement is introduced.
+
+```text
+ATM
+  + beginMaintenance() -> void
+  + replaceCashCounts(counts: Map<long, int>) -> void
+  + finishMaintenance() -> void
+```
+
+> I would allow maintenance only after the customer session has ended and all withdrawals have been resolved. While the machine is in MAINTENANCE, an operator can replace counts with physically verified totals. Returning to IDLE also requires a successful device check.
+
+These operations use the same ATM lock as customer actions. `beginMaintenance` rejects an active card or withdrawal. An OUT_OF_SERVICE machine with an unresolved operation must complete reconciliation before entering this refill flow. A stuck card also needs to be handled before normal service resumes.
+
+`replaceCashCounts` validates denominations and nonnegative counts, makes a defensive copy, and updates CashInventory. Use final verified counts rather than an increment that could be applied twice if the operator retries.
+
+For example, if there are four usable ₹200 notes and the operator loads ten more, the verified count is fourteen. Submitting fourteen twice should still leave fourteen. A persistent version also records the operator action and the resulting counts before reopening.
+
+Replacing counts makes the operator's physical count authoritative, so entry into maintenance and completion of device checks matter. Refilling alone does not prove that an earlier uncertain withdrawal was settled correctly.
+
+### 6. What would change if the bank did not support holds?
+
+Our current flow relies on a reservation that can later be captured or released. If the bank only supports a debit and a reversal, the sequence changes. Confirm the bank's guarantees before changing the adapter.
+
+> I would debit before dispensing and keep the debit reference with the withdrawal. If the bank definitely declines, I would stop before touching the dispenser. If the debit succeeds and the dispenser proves that no cash was delivered, I would reverse that debit. An uncertain outcome would stay pending for review.
+
+A reversal cancels a particular debit. It needs the original reference and its own safe retry rules.
+
+| Outcome | Next action |
+| --- | --- |
+| Debit is definitely declined | Return DECLINED without dispensing. |
+| Debit reply is lost | Query the debit by operation ID and resolve it before proceeding. |
+| Debit confirmed, full cash delivery confirmed | Complete the withdrawal. |
+| Debit confirmed, no delivery conclusively confirmed | Reverse the original debit. |
+| Cash delivery or reversal outcome is uncertain | Retain the references and stop for review. |
+
+Suppose a ₹600 debit succeeds, the dispenser confirms NONE, and the reversal times out. The customer may already have been refunded, or the debit may still stand. Keep the reversal pending and check its status using the same reference. Sending another untracked refund risks crediting twice.
+
+The difference from holds is visible to the customer. Funds have been posted as a debit before cash is delivered, and a reversal may take time to appear. That is a product and bank-integration trade-off. ATM still coordinates the steps, but BankGateway's methods and the withdrawal's recorded phases must reflect the protocol the bank actually supports.
+
 
 ## What is expected at each level?
 
