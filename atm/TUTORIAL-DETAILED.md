@@ -128,7 +128,7 @@ ATM
   - hardware: Hardware
   - cash: CashInventory
   - withdrawalLimit: long              // paise
-  - state: string                      // IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
+  - state: ATMState                    // IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
   - card: string | null
   - account: string | null
   - attempts: int
@@ -142,7 +142,7 @@ ATM
   + balance() -> long                   // available balance in paise
   + withdraw(amount: long) -> string    // amount in paise
   + cancel() -> void
-  + state() -> string
+  + state() -> ATMState
   + pendingOperation() -> string | null
   + cashSnapshot() -> Map<long, int>
   - endSession(outOfService: boolean) -> void
@@ -188,7 +188,9 @@ For four states and a small set of operations, direct checks are easy to review.
 
 **Our choice**
 
-Use strings for this walkthrough. The transitions are the important part, not an enum or a hierarchy. Only ATM methods change the state. Callers cannot set it directly.
+Use an `ATMState` enum with four values: `IDLE`, `PIN_REQUIRED`, `READY`, and `OUT_OF_SERVICE`. It gives us named states and catches misspelled values. The enum defines the allowed values. ATM still checks which transitions are allowed.
+
+An enum and the State pattern solve different problems. We can use an enum with these direct checks. A class per state becomes useful when each state needs substantial behavior of its own.
 
 ### BankGateway
 
@@ -252,12 +254,20 @@ For important operations, we'll explain the **Core logic** and **Edge cases** be
 
 ### BankGateway and Hardware
 
+We also define `ATMState` alongside these interfaces so the later methods can use named enum values. Python imports `Enum` from the standard library.
+
 These interfaces define what ATM can ask the bank and hardware to do. Each call waits for a result or times out. The adapters must not call ATM methods while ATM is waiting for them, because it still holds the lock. A timeout does not prove that the external action stopped.
 
 
 Python:
 
 ```python
+class ATMState(Enum):
+    IDLE = "IDLE"
+    PIN_REQUIRED = "PIN_REQUIRED"
+    READY = "READY"
+    OUT_OF_SERVICE = "OUT_OF_SERVICE"
+
 class BankGateway(Protocol):
     def authenticate(self, card_id: str, pin: str) -> str | None:
         """Return an account ID, or None for a rejected card/PIN."""
@@ -290,6 +300,10 @@ class Hardware(Protocol):
 Java:
 
 ```java
+public enum ATMState {
+    IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
+}
+
 public interface BankGateway {
     String authenticate(String cardId, String pin); // null means rejected
     long availableBalance(String accountId);
@@ -503,7 +517,7 @@ def __init__(self, bank: BankGateway, hardware: Hardware,
     self._cash = CashInventory(notes)
     self._limit = withdrawal_limit
     self._lock = Lock()
-    self._state = "IDLE"
+    self._state = ATMState.IDLE
     self._card: str | None = None
     self._account: str | None = None
     self._attempts = 0
@@ -517,7 +531,7 @@ private final BankGateway bank;
 private final Hardware hardware;
 private final CashInventory cash;
 private final long withdrawalLimit;
-private String state = "IDLE";
+private ATMState state = ATMState.IDLE;
 private String card;
 private String account;
 private int attempts;
@@ -559,17 +573,17 @@ Python:
 ```python
 def insert_card(self, card_id: str) -> None:
     with self._lock:
-        if self._state != "IDLE":
+        if self._state != ATMState.IDLE:
             raise ValueError("ATM is not available")
         if not isinstance(card_id, str) or not card_id.strip():
             raise ValueError("Card ID required")
         self._card = card_id
         self._attempts = 0
-        self._state = "PIN_REQUIRED"
+        self._state = ATMState.PIN_REQUIRED
 
 def enter_pin(self, pin: str) -> bool:
     with self._lock:
-        if self._state != "PIN_REQUIRED":
+        if self._state != ATMState.PIN_REQUIRED:
             raise ValueError("Insert a card first")
         if not isinstance(pin, str) or not pin:
             raise ValueError("PIN required")
@@ -584,7 +598,7 @@ def enter_pin(self, pin: str) -> bool:
                 self._end_session()
             return False
         self._account = account
-        self._state = "READY"
+        self._state = ATMState.READY
         return True
 ```
 
@@ -592,15 +606,15 @@ Java:
 
 ```java
 public synchronized void insertCard(String cardId) {
-    if (!state.equals("IDLE")) throw new IllegalStateException("ATM is not available");
+    if (state != ATMState.IDLE) throw new IllegalStateException("ATM is not available");
     if (cardId == null || cardId.isBlank()) throw new IllegalArgumentException("Card ID required");
     card = cardId;
     attempts = 0;
-    state = "PIN_REQUIRED";
+    state = ATMState.PIN_REQUIRED;
 }
 
 public synchronized boolean enterPin(String pin) {
-    if (!state.equals("PIN_REQUIRED")) throw new IllegalStateException("Insert a card first");
+    if (state != ATMState.PIN_REQUIRED) throw new IllegalStateException("Insert a card first");
     if (pin == null || pin.isEmpty()) throw new IllegalArgumentException("PIN required");
     String authenticated;
     try {
@@ -615,7 +629,7 @@ public synchronized boolean enterPin(String pin) {
         return false;
     }
     account = authenticated;
-    state = "READY";
+    state = ATMState.READY;
     return true;
 }
 ```
@@ -630,7 +644,7 @@ Python:
 ```python
 def balance(self) -> int:
     with self._lock:
-        if self._state != "READY":
+        if self._state != ATMState.READY:
             raise ValueError("Authenticate first")
         return self._bank.available_balance(self._account)
 ```
@@ -639,7 +653,7 @@ Java:
 
 ```java
 public synchronized long balance() {
-    if (!state.equals("READY")) throw new IllegalStateException("Authenticate first");
+    if (state != ATMState.READY) throw new IllegalStateException("Authenticate first");
     return bank.availableBalance(account);
 }
 ```
@@ -703,7 +717,7 @@ Python:
 ```python
 def withdraw(self, amount: int) -> str:
     with self._lock:
-        if self._state != "READY":
+        if self._state != ATMState.READY:
             raise ValueError("Authenticate first")
         if type(amount) is not int or not 0 < amount <= self._limit:
             raise ValueError("Amount must be positive and within the limit")
@@ -738,7 +752,7 @@ Java:
 
 ```java
 public synchronized String withdraw(long amount) {
-    if (!state.equals("READY")) throw new IllegalStateException("Authenticate first");
+    if (state != ATMState.READY) throw new IllegalStateException("Authenticate first");
     if (amount <= 0 || amount > withdrawalLimit)
         throw new IllegalArgumentException("Amount must be positive and within the limit");
     var plan = cash.plan(amount);
@@ -785,36 +799,36 @@ Python:
 ```python
 def cancel(self) -> None:
     with self._lock:
-        if self._state in ("PIN_REQUIRED", "READY"):
+        if self._state in (ATMState.PIN_REQUIRED, ATMState.READY):
             self._end_session()
 
 def _end_session(self, out_of_service: bool = False) -> None:
-    self._state = "OUT_OF_SERVICE" if out_of_service else "IDLE"
+    self._state = ATMState.OUT_OF_SERVICE if out_of_service else ATMState.IDLE
     self._card = None
     self._account = None
     self._attempts = 0
     try:
         self._hardware.eject_card()
     except Exception:
-        self._state = "OUT_OF_SERVICE"
+        self._state = ATMState.OUT_OF_SERVICE
 ```
 
 Java:
 
 ```java
 public synchronized void cancel() {
-    if (state.equals("PIN_REQUIRED") || state.equals("READY")) endSession(false);
+    if (state == ATMState.PIN_REQUIRED || state == ATMState.READY) endSession(false);
 }
 
 private void endSession(boolean outOfService) {
-    state = outOfService ? "OUT_OF_SERVICE" : "IDLE";
+    state = outOfService ? ATMState.OUT_OF_SERVICE : ATMState.IDLE;
     card = null;
     account = null;
     attempts = 0;
     try {
         hardware.ejectCard();
     } catch (RuntimeException failure) {
-        state = "OUT_OF_SERVICE";
+        state = ATMState.OUT_OF_SERVICE;
     }
 }
 ```
@@ -829,7 +843,7 @@ private void endSession(boolean outOfService) {
 Python:
 
 ```python
-def status(self) -> tuple[str, str | None]:
+def status(self) -> tuple[ATMState, str | None]:
     with self._lock:
         return self._state, self._pending
 
@@ -841,7 +855,7 @@ def cash_snapshot(self) -> dict[int, int]:
 Java:
 
 ```java
-public synchronized String state() { return state; }
+public synchronized ATMState state() { return state; }
 
 public synchronized String pendingOperation() { return pending; }
 

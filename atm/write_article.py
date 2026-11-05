@@ -158,7 +158,7 @@ ATM
   - hardware: Hardware
   - cash: CashInventory
   - withdrawalLimit: long              // paise
-  - state: string                      // IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
+  - state: ATMState                    // IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
   - card: string | null
   - account: string | null
   - attempts: int
@@ -172,7 +172,7 @@ ATM
   + balance() -> long                   // available balance in paise
   + withdraw(amount: long) -> string    // amount in paise
   + cancel() -> void
-  + state() -> string
+  + state() -> ATMState
   + pendingOperation() -> string | null
   + cashSnapshot() -> Map<long, int>
   - endSession(outOfService: boolean) -> void
@@ -218,7 +218,9 @@ For four states and a small set of operations, direct checks are easy to review.
 
 **Our choice**
 
-Use strings for this walkthrough. The transitions are the important part, not an enum or a hierarchy. Only ATM methods change the state. Callers cannot set it directly.
+Use an `ATMState` enum with four values: `IDLE`, `PIN_REQUIRED`, `READY`, and `OUT_OF_SERVICE`. It gives us named states and catches misspelled values. The enum defines the allowed values. ATM still checks which transitions are allowed.
+
+An enum and the State pattern solve different problems. We can use an enum with these direct checks. A class per state becomes useful when each state needs substantial behavior of its own.
 
 ### BankGateway
 
@@ -282,10 +284,12 @@ For important operations, we'll explain the **Core logic** and **Edge cases** be
 
 ### BankGateway and Hardware
 
+We also define `ATMState` alongside these interfaces so the later methods can use named enum values. Python imports `Enum` from the standard library.
+
 These interfaces define what ATM can ask the bank and hardware to do. Each call waits for a result or times out. The adapters must not call ATM methods while ATM is waiting for them, because it still holds the lock. A timeout does not prove that the external action stopped.
 
 '''
-article += pair(py_class('BankGateway')+'\n\n'+py_class('Hardware'), java_block('public interface BankGateway')+'\n\n'+java_block('public interface Hardware'))
+article += pair(py_class('ATMState')+'\n\n'+py_class('BankGateway')+'\n\n'+py_class('Hardware'), java_block('public enum ATMState')+'\n\n'+java_block('public interface BankGateway')+'\n\n'+java_block('public interface Hardware'))
 article += '''
 ### CashInventory
 
@@ -482,7 +486,7 @@ article += '''
 `cash_snapshot` delegates to the inventory's copying method. All these reads take the same lock as writes. The pending ID identifies the withdrawal to investigate. It does not tell us whether a refund is safe.
 
 '''
-article += pair(py_methods(['status','cash_snapshot']),java_block('public synchronized String state')+'\n\n'+java_block('public synchronized String pendingOperation')+'\n\n'+java_block('public synchronized Map<Long, Integer> cashSnapshot'))
+article += pair(py_methods(['status','cash_snapshot']),java_block('public synchronized ATMState state')+'\n\n'+java_block('public synchronized String pendingOperation')+'\n\n'+java_block('public synchronized Map<Long, Integer> cashSnapshot'))
 article += '''
 ### Verification
 

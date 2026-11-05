@@ -2,6 +2,10 @@ import java.util.*;
 
 /** All money values are integer paise. */
 public final class ATM {
+    public enum ATMState {
+        IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
+    }
+
     public interface BankGateway {
         String authenticate(String cardId, String pin); // null means rejected
         long availableBalance(String accountId);
@@ -68,7 +72,7 @@ public final class ATM {
     private final Hardware hardware;
     private final CashInventory cash;
     private final long withdrawalLimit;
-    private String state = "IDLE";
+    private ATMState state = ATMState.IDLE;
     private String card;
     private String account;
     private int attempts;
@@ -84,15 +88,15 @@ public final class ATM {
     }
 
     public synchronized void insertCard(String cardId) {
-        if (!state.equals("IDLE")) throw new IllegalStateException("ATM is not available");
+        if (state != ATMState.IDLE) throw new IllegalStateException("ATM is not available");
         if (cardId == null || cardId.isBlank()) throw new IllegalArgumentException("Card ID required");
         card = cardId;
         attempts = 0;
-        state = "PIN_REQUIRED";
+        state = ATMState.PIN_REQUIRED;
     }
 
     public synchronized boolean enterPin(String pin) {
-        if (!state.equals("PIN_REQUIRED")) throw new IllegalStateException("Insert a card first");
+        if (state != ATMState.PIN_REQUIRED) throw new IllegalStateException("Insert a card first");
         if (pin == null || pin.isEmpty()) throw new IllegalArgumentException("PIN required");
         String authenticated;
         try {
@@ -107,17 +111,17 @@ public final class ATM {
             return false;
         }
         account = authenticated;
-        state = "READY";
+        state = ATMState.READY;
         return true;
     }
 
     public synchronized long balance() {
-        if (!state.equals("READY")) throw new IllegalStateException("Authenticate first");
+        if (state != ATMState.READY) throw new IllegalStateException("Authenticate first");
         return bank.availableBalance(account);
     }
 
     public synchronized String withdraw(long amount) {
-        if (!state.equals("READY")) throw new IllegalStateException("Authenticate first");
+        if (state != ATMState.READY) throw new IllegalStateException("Authenticate first");
         if (amount <= 0 || amount > withdrawalLimit)
             throw new IllegalArgumentException("Amount must be positive and within the limit");
         var plan = cash.plan(amount);
@@ -150,22 +154,22 @@ public final class ATM {
     }
 
     public synchronized void cancel() {
-        if (state.equals("PIN_REQUIRED") || state.equals("READY")) endSession(false);
+        if (state == ATMState.PIN_REQUIRED || state == ATMState.READY) endSession(false);
     }
 
     private void endSession(boolean outOfService) {
-        state = outOfService ? "OUT_OF_SERVICE" : "IDLE";
+        state = outOfService ? ATMState.OUT_OF_SERVICE : ATMState.IDLE;
         card = null;
         account = null;
         attempts = 0;
         try {
             hardware.ejectCard();
         } catch (RuntimeException failure) {
-            state = "OUT_OF_SERVICE";
+            state = ATMState.OUT_OF_SERVICE;
         }
     }
 
-    public synchronized String state() { return state; }
+    public synchronized ATMState state() { return state; }
     public synchronized String pendingOperation() { return pending; }
     public synchronized Map<Long, Integer> cashSnapshot() { return cash.snapshot(); }
 }

@@ -1,8 +1,16 @@
 """ATM teaching implementation. All amounts are integer paise."""
 from __future__ import annotations
+from enum import Enum
 from threading import Lock
 from typing import Protocol
 from uuid import uuid4
+
+
+class ATMState(Enum):
+    IDLE = "IDLE"
+    PIN_REQUIRED = "PIN_REQUIRED"
+    READY = "READY"
+    OUT_OF_SERVICE = "OUT_OF_SERVICE"
 
 
 class BankGateway(Protocol):
@@ -84,7 +92,7 @@ class ATM:
         self._cash = CashInventory(notes)
         self._limit = withdrawal_limit
         self._lock = Lock()
-        self._state = "IDLE"
+        self._state = ATMState.IDLE
         self._card: str | None = None
         self._account: str | None = None
         self._attempts = 0
@@ -92,17 +100,17 @@ class ATM:
 
     def insert_card(self, card_id: str) -> None:
         with self._lock:
-            if self._state != "IDLE":
+            if self._state != ATMState.IDLE:
                 raise ValueError("ATM is not available")
             if not isinstance(card_id, str) or not card_id.strip():
                 raise ValueError("Card ID required")
             self._card = card_id
             self._attempts = 0
-            self._state = "PIN_REQUIRED"
+            self._state = ATMState.PIN_REQUIRED
 
     def enter_pin(self, pin: str) -> bool:
         with self._lock:
-            if self._state != "PIN_REQUIRED":
+            if self._state != ATMState.PIN_REQUIRED:
                 raise ValueError("Insert a card first")
             if not isinstance(pin, str) or not pin:
                 raise ValueError("PIN required")
@@ -117,18 +125,18 @@ class ATM:
                     self._end_session()
                 return False
             self._account = account
-            self._state = "READY"
+            self._state = ATMState.READY
             return True
 
     def balance(self) -> int:
         with self._lock:
-            if self._state != "READY":
+            if self._state != ATMState.READY:
                 raise ValueError("Authenticate first")
             return self._bank.available_balance(self._account)
 
     def withdraw(self, amount: int) -> str:
         with self._lock:
-            if self._state != "READY":
+            if self._state != ATMState.READY:
                 raise ValueError("Authenticate first")
             if type(amount) is not int or not 0 < amount <= self._limit:
                 raise ValueError("Amount must be positive and within the limit")
@@ -160,20 +168,20 @@ class ATM:
 
     def cancel(self) -> None:
         with self._lock:
-            if self._state in ("PIN_REQUIRED", "READY"):
+            if self._state in (ATMState.PIN_REQUIRED, ATMState.READY):
                 self._end_session()
 
     def _end_session(self, out_of_service: bool = False) -> None:
-        self._state = "OUT_OF_SERVICE" if out_of_service else "IDLE"
+        self._state = ATMState.OUT_OF_SERVICE if out_of_service else ATMState.IDLE
         self._card = None
         self._account = None
         self._attempts = 0
         try:
             self._hardware.eject_card()
         except Exception:
-            self._state = "OUT_OF_SERVICE"
+            self._state = ATMState.OUT_OF_SERVICE
 
-    def status(self) -> tuple[str, str | None]:
+    def status(self) -> tuple[ATMState, str | None]:
         with self._lock:
             return self._state, self._pending
 

@@ -34,7 +34,7 @@ def excerpts(language):
 
 import textwrap
 blocks = excerpts('python')
-imports = 'from __future__ import annotations\nfrom threading import Lock\nfrom typing import Protocol\nfrom uuid import uuid4\n'
+imports = 'from __future__ import annotations\nfrom enum import Enum\nfrom threading import Lock\nfrom typing import Protocol\nfrom uuid import uuid4\n'
 assembled = imports + '\n\n'.join(blocks['bankgateway-and-hardware'])
 for heading, name in [('cashinventory_1', 'CashInventory'), ('atm_1', 'ATM')]:
     assembled += f'\n\nclass {name}:\n'
@@ -46,6 +46,7 @@ namespace = {'__name__':'article_atm'}
 exec(compile(assembled, '<article>', 'exec'),namespace)
 import test_atm, unittest
 test_atm.ATM, test_atm.CashInventory = namespace['ATM'], namespace['CashInventory']
+test_atm.ATMState = namespace['ATMState']
 result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_atm))
 assert result.wasSuccessful()
 print('HTML links, IDs, 11 tab pairs, navigation, and assembled Python snippets passed.')
