@@ -270,7 +270,9 @@ The two methods worth spending most of our interview time on are `CashInventory.
 
 Here is what we will implement:
 
-- **BankGateway and Hardware:** define their contracts. Real bank communication and device drivers stay outside this exercise.
+- **ATMState:** define the allowed states.
+- **BankGateway:** define authentication, balance inquiry, and hold operations.
+- **Hardware:** define cash delivery and card ejection.
 - **CashInventory:** implement `plan` in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.
 - **ATM:** implement card entry, PIN checks, balance inquiry, withdrawal, and cancellation.
 
@@ -278,14 +280,30 @@ We'll build the dependencies first, then use them in ATM. Each method shown unde
 
 For important operations, we'll explain the **Core logic** and **Edge cases** before the code. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.
 
-### BankGateway and Hardware
+### ATMState
 
-We also define `ATMState` alongside these interfaces so the later methods can use named enum values. Python imports `Enum` from the standard library.
-
-These interfaces define what ATM can ask the bank and hardware to do. Each call waits for a result or times out. The adapters must not call ATM methods while ATM is waiting for them, because it still holds the lock. A timeout does not prove that the external action stopped.
+Define the four states used by ATM. Python imports `Enum` from the standard library. The ATM methods will use these values when checking and changing state.
 
 '''
-article += pair(py_class('ATMState')+'\n\n'+py_class('BankGateway')+'\n\n'+py_class('Hardware'), java_block('public enum ATMState')+'\n\n'+java_block('public interface BankGateway')+'\n\n'+java_block('public interface Hardware'))
+article += pair(py_class('ATMState'), java_block('public enum ATMState'))
+article += '''
+### BankGateway
+
+The bank interface provides authentication, available-balance inquiry, and hold operations. Authentication returns an account ID or a rejected result. A rejected hold returns false, while an exception leaves its outcome uncertain.
+
+Each adapter call waits for a result or times out. The bank adapter must not call ATM methods while ATM is waiting for it, because ATM still holds the lock.
+
+'''
+article += pair(py_class('BankGateway'), java_block('public interface BankGateway'))
+article += '''
+### Hardware
+
+The hardware interface handles dispensing and card ejection. `dispense` reports ALL, NONE, or UNKNOWN according to the delivery guarantees defined above. A timeout does not prove that the external action stopped. Failed ejection raises an error so ATM can take the machine out of service.
+
+The hardware adapter must also avoid calling ATM methods while ATM holds its lock.
+
+'''
+article += pair(py_class('Hardware'), java_block('public interface Hardware'))
 article += '''
 ### CashInventory
 

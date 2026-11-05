@@ -240,7 +240,9 @@ The two methods worth spending most of our interview time on are `CashInventory.
 
 Here is what we will implement:
 
-- **BankGateway and Hardware:** define their contracts. Real bank communication and device drivers stay outside this exercise.
+- **ATMState:** define the allowed states.
+- **BankGateway:** define authentication, balance inquiry, and hold operations.
+- **Hardware:** define cash delivery and card ejection.
 - **CashInventory:** implement `plan` in detail because exact note selection is easy to get wrong. Its constructor and stock updates are short.
 - **ATM:** implement card entry, PIN checks, balance inquiry, withdrawal, and cancellation.
 
@@ -248,11 +250,9 @@ We'll build the dependencies first, then use them in ATM. Each method shown unde
 
 For important operations, we'll explain the **Core logic** and **Edge cases** before the code. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.
 
-### BankGateway and Hardware
+### ATMState
 
-We also define `ATMState` alongside these interfaces so the later methods can use named enum values. Python imports `Enum` from the standard library.
-
-These interfaces define what ATM can ask the bank and hardware to do. Each call waits for a result or times out. The adapters must not call ATM methods while ATM is waiting for them, because it still holds the lock. A timeout does not prove that the external action stopped.
+Define the four states used by ATM. Python imports `Enum` from the standard library. The ATM methods will use these values when checking and changing state.
 
 
 Python:
@@ -263,7 +263,26 @@ class ATMState(Enum):
     PIN_REQUIRED = "PIN_REQUIRED"
     READY = "READY"
     OUT_OF_SERVICE = "OUT_OF_SERVICE"
+```
 
+Java:
+
+```java
+public enum ATMState {
+    IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
+}
+```
+
+### BankGateway
+
+The bank interface provides authentication, available-balance inquiry, and hold operations. Authentication returns an account ID or a rejected result. A rejected hold returns false, while an exception leaves its outcome uncertain.
+
+Each adapter call waits for a result or times out. The bank adapter must not call ATM methods while ATM is waiting for it, because ATM still holds the lock.
+
+
+Python:
+
+```python
 class BankGateway(Protocol):
     def authenticate(self, card_id: str, pin: str) -> str | None:
         """Return an account ID, or None for a rejected card/PIN."""
@@ -282,7 +301,30 @@ class BankGateway(Protocol):
     def release(self, operation_id: str) -> None:
         """Cancel this hold without debiting the account."""
         ...
+```
 
+Java:
+
+```java
+public interface BankGateway {
+    String authenticate(String cardId, String pin); // null means rejected
+    long availableBalance(String accountId);
+    boolean hold(String accountId, long amount, String operationId);
+    void capture(String operationId);
+    void release(String operationId);
+}
+```
+
+### Hardware
+
+The hardware interface handles dispensing and card ejection. `dispense` reports ALL, NONE, or UNKNOWN according to the delivery guarantees defined above. A timeout does not prove that the external action stopped. Failed ejection raises an error so ATM can take the machine out of service.
+
+The hardware adapter must also avoid calling ATM methods while ATM holds its lock.
+
+
+Python:
+
+```python
 class Hardware(Protocol):
     def dispense(self, notes: dict[int, int]) -> str:
         """ALL: exact bundle delivered. NONE: no cash left the machine.
@@ -296,18 +338,6 @@ class Hardware(Protocol):
 Java:
 
 ```java
-public enum ATMState {
-    IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
-}
-
-public interface BankGateway {
-    String authenticate(String cardId, String pin); // null means rejected
-    long availableBalance(String accountId);
-    boolean hold(String accountId, long amount, String operationId);
-    void capture(String operationId);
-    void release(String operationId);
-}
-
 public interface Hardware {
     // ALL: exact bundle delivered. NONE: nothing delivered.
     // UNKNOWN: uncertain or partial delivery.
