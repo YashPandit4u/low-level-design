@@ -78,9 +78,6 @@ class CashInventory:
         for denomination, count in plan.items():
             self._notes[denomination] -= count
 
-    def snapshot(self) -> dict[int, int]:
-        return dict(self._notes)
-
 
 class ATM:
     def __init__(self, bank: BankGateway, hardware: Hardware,
@@ -180,11 +177,3 @@ class ATM:
             self._hardware.eject_card()
         except Exception:
             self._state = ATMState.OUT_OF_SERVICE
-
-    def status(self) -> tuple[ATMState, str | None]:
-        with self._lock:
-            return self._state, self._pending
-
-    def cash_snapshot(self) -> dict[int, int]:
-        with self._lock:
-            return self._cash.snapshot()

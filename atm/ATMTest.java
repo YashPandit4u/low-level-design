@@ -45,6 +45,26 @@ public final class ATMTest {
             if (ejectFails) throw new RuntimeException();
         }
     }
+    // Tests inspect private fields after operations finish. These are test utilities.
+    static Object readField(Object target, String name) {
+        try {
+            var field = target.getClass().getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(target);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+    static ATM.ATMState state(ATM atm) {
+        return (ATM.ATMState) readField(atm, "state");
+    }
+    static String pending(ATM atm) {
+        return (String) readField(atm, "pending");
+    }
+    @SuppressWarnings("unchecked")
+    static Map<Long, Integer> stock(ATM atm) {
+        return (Map<Long, Integer>) readField(readField(atm, "cash"), "notes");
+    }
     static void check(boolean condition) {
         if (!condition) throw new AssertionError();
     }
@@ -66,7 +86,7 @@ public final class ATMTest {
         check(atm.enterPin("1234"));
         try { atm.enterPin("bad"); throw new AssertionError(); }
         catch (IllegalStateException expected) { }
-        check(atm.state().equals(ATM.ATMState.READY));
+        check(state(atm).equals(ATM.ATMState.READY));
         atm.cancel();
         atm.insertCard("card-A");
         check(!atm.enterPin("bad"));
@@ -74,16 +94,16 @@ public final class ATMTest {
         atm.insertCard("card-A");
         for (int i = 0; i < 2; i++) {
             check(!atm.enterPin("bad"));
-            check(atm.state().equals(ATM.ATMState.PIN_REQUIRED));
+            check(state(atm).equals(ATM.ATMState.PIN_REQUIRED));
         }
         check(!atm.enterPin("bad"));
-        check(atm.state().equals(ATM.ATMState.IDLE) && device.ejections == 3);
+        check(state(atm).equals(ATM.ATMState.IDLE) && device.ejections == 3);
         try { atm.balance(); throw new AssertionError(); }
         catch (IllegalStateException expected) { }
         atm.insertCard("card-A");
         device.ejectFails = true;
         for (int i = 0; i < 3; i++) check(!atm.enterPin("bad"));
-        check(atm.state().equals(ATM.ATMState.OUT_OF_SERVICE));
+        check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE));
         atm.cancel();
         try { atm.insertCard("card-A"); throw new AssertionError(); }
         catch (IllegalStateException expected) { }
@@ -95,8 +115,8 @@ public final class ATMTest {
         bank.fail = "authenticate";
         try { atm.enterPin("1234"); throw new AssertionError(); }
         catch (RuntimeException expected) { }
-        check(atm.state().equals(ATM.ATMState.OUT_OF_SERVICE) && device.ejections == 1);
-        check(atm.pendingOperation() == null);
+        check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE) && device.ejections == 1);
+        check(pending(atm) == null);
     }
 
     static void shortageThenSuccess() {
@@ -108,15 +128,15 @@ public final class ATMTest {
         check(bank.holds.isEmpty() && device.calls == 0);
         bank.funds = 10000;
         check(atm.withdraw(60000).equals("DECLINED"));
-        check(atm.cashSnapshot().equals(Map.of(50000L, 1, 20000L, 3)));
-        check(atm.state().equals(ATM.ATMState.READY) && atm.pendingOperation() == null);
+        check(stock(atm).equals(Map.of(50000L, 1, 20000L, 3)));
+        check(state(atm).equals(ATM.ATMState.READY) && pending(atm) == null);
         check(device.calls == 0);
         bank.funds = 100000;
         check(atm.withdraw(60000).equals("SUCCESS"));
         check(atm.withdraw(60000).equals("CASH_UNAVAILABLE"));
         check(bank.funds == 40000 && bank.holds.isEmpty() && device.calls == 1);
-        check(atm.cashSnapshot().equals(Map.of(50000L, 1, 20000L, 0)));
-        check(atm.state().equals(ATM.ATMState.READY) && atm.pendingOperation() == null);
+        check(stock(atm).equals(Map.of(50000L, 1, 20000L, 0)));
+        check(state(atm).equals(ATM.ATMState.READY) && pending(atm) == null);
     }
 
     static void cancellationDuringDispensing() throws Exception {
@@ -153,8 +173,8 @@ public final class ATMTest {
                 cancellation.get(2, TimeUnit.SECONDS);
             }
             check(device.ejections == 1);
-            check(atm.state().equals(deliveryResult.equals("ALL") ? ATM.ATMState.IDLE : ATM.ATMState.OUT_OF_SERVICE));
-            check((atm.pendingOperation() == null) == deliveryResult.equals("ALL"));
+            check(state(atm).equals(deliveryResult.equals("ALL") ? ATM.ATMState.IDLE : ATM.ATMState.OUT_OF_SERVICE));
+            check((pending(atm) == null) == deliveryResult.equals("ALL"));
             check(bank.funds == (deliveryResult.equals("ALL") ? 80000 : 100000));
             check(bank.holds.isEmpty() == deliveryResult.equals("ALL"));
         }
@@ -191,12 +211,8 @@ public final class ATMTest {
         atm = new ATM(bank, device, stock, 20000);
         stock.put(20000L, 99);
         atm.insertCard("card-A"); check(atm.enterPin("1234"));
-        var snapshot = atm.cashSnapshot();
-        try { snapshot.put(20000L, 88); throw new AssertionError(); }
-        catch (UnsupportedOperationException expected) { }
         check(atm.withdraw(20000).equals("SUCCESS"));
-        check(snapshot.get(20000L) == 1);
-        check(atm.cashSnapshot().equals(Map.of(20000L, 0)));
+        check(stock(atm).equals(Map.of(20000L, 0)));
         check(atm.withdraw(20000).equals("CASH_UNAVAILABLE"));
         check(bank.funds == 80000 && device.calls == 1);
     }
@@ -207,8 +223,8 @@ public final class ATMTest {
         device.outcome = "UNKNOWN";
         device.ejectFails = true;
         check(atm.withdraw(20000).equals("PENDING_REVIEW"));
-        String pending = atm.pendingOperation();
-        check(atm.state().equals(ATM.ATMState.OUT_OF_SERVICE) && bank.holds.containsKey(pending));
+        String pending = pending(atm);
+        check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE) && bank.holds.containsKey(pending));
         atm.cancel();
         for (Runnable action : List.<Runnable>of(
                 () -> atm.insertCard("card-B"), () -> atm.enterPin("1234"),
@@ -216,10 +232,10 @@ public final class ATMTest {
             try { action.run(); throw new AssertionError(); }
             catch (IllegalStateException expected) { }
         }
-        check(atm.state().equals(ATM.ATMState.OUT_OF_SERVICE) && atm.pendingOperation().equals(pending));
+        check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE) && pending(atm).equals(pending));
         check(device.ejections == 1 && device.calls == 1);
         check(bank.funds == 100000 && bank.holds.get(pending) == 20000);
-        check(atm.cashSnapshot().equals(Map.of(50000L, 1, 20000L, 3)));
+        check(stock(atm).equals(Map.of(50000L, 1, 20000L, 3)));
     }
 
     public static void main(String[] args) throws Exception {
@@ -231,12 +247,12 @@ public final class ATMTest {
         Bank bank = new Bank(); Device device = new Device();
         ATM atm = ready(bank, device);
         check(atm.withdraw(60000).equals("SUCCESS"));
-        check(atm.balance() == 40000 && atm.cashSnapshot().get(20000L) == 0);
+        check(atm.balance() == 40000 && stock(atm).get(20000L) == 0);
         atm.cancel();
-        check(atm.state().equals(ATM.ATMState.IDLE) && device.ejections == 1);
+        check(state(atm).equals(ATM.ATMState.IDLE) && device.ejections == 1);
         atm.insertCard("card-A");
         for (int i = 0; i < 3; i++) check(!atm.enterPin("bad"));
-        check(atm.state().equals(ATM.ATMState.IDLE));
+        check(state(atm).equals(ATM.ATMState.IDLE));
 
         for (String outcome : List.of("NONE", "UNKNOWN", "TIMEOUT")) {
             bank = new Bank(); device = new Device(); atm = ready(bank, device);
@@ -246,19 +262,19 @@ public final class ATMTest {
                 check(result.equals("NOT_DISPENSED") && bank.holds.isEmpty());
             } else {
                 check(result.equals("PENDING_REVIEW") && !bank.holds.isEmpty());
-                check(atm.state().equals(ATM.ATMState.OUT_OF_SERVICE));
+                check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE));
                 atm.cancel();
-                check(atm.state().equals(ATM.ATMState.OUT_OF_SERVICE));
+                check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE));
             }
-            check(atm.cashSnapshot().get(20000L) == 3);
+            check(stock(atm).get(20000L) == 3);
         }
         for (String stage : List.of("hold", "capture", "release")) {
             bank = new Bank(); device = new Device(); atm = ready(bank, device);
             bank.fail = stage;
             if (stage.equals("release")) device.outcome = "NONE";
             check(atm.withdraw(20000).equals("PENDING_REVIEW"));
-            check(atm.pendingOperation() != null && atm.state().equals(ATM.ATMState.OUT_OF_SERVICE));
-            check(atm.cashSnapshot().get(20000L) == (stage.equals("capture") ? 2 : 3));
+            check(pending(atm) != null && state(atm).equals(ATM.ATMState.OUT_OF_SERVICE));
+            check(stock(atm).get(20000L) == (stage.equals("capture") ? 2 : 3));
         }
         bank = new Bank(); device = new Device(); atm = ready(bank, device);
         check(atm.withdraw(10000).equals("CASH_UNAVAILABLE") && bank.holds.isEmpty());
@@ -269,7 +285,7 @@ public final class ATMTest {
             catch (IllegalArgumentException expected) { }
         }
         device.ejectFails = true; atm.cancel();
-        check(atm.state().equals(ATM.ATMState.OUT_OF_SERVICE));
+        check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE));
 
         for (String stage : List.of("capture_after", "release_after")) {
             bank = new Bank(); device = new Device(); atm = ready(bank, device);
@@ -277,9 +293,9 @@ public final class ATMTest {
             boolean delivered = stage.equals("capture_after");
             device.outcome = delivered ? "ALL" : "NONE";
             check(atm.withdraw(20000).equals("PENDING_REVIEW"));
-            check(atm.state().equals(ATM.ATMState.OUT_OF_SERVICE) && atm.pendingOperation() != null);
+            check(state(atm).equals(ATM.ATMState.OUT_OF_SERVICE) && pending(atm) != null);
             check(bank.holds.isEmpty() && bank.funds == (delivered ? 80000 : 100000));
-            check(atm.cashSnapshot().get(20000L) == (delivered ? 2 : 3));
+            check(stock(atm).get(20000L) == (delivered ? 2 : 3));
             check(device.calls == 1);
             try { atm.withdraw(20000); throw new AssertionError(); }
             catch (IllegalStateException expected) { }
@@ -288,7 +304,7 @@ public final class ATMTest {
         bank.fail = "balance";
         try { atm.balance(); throw new AssertionError(); }
         catch (RuntimeException expected) { }
-        check(atm.state().equals(ATM.ATMState.READY) && device.ejections == 0);
+        check(state(atm).equals(ATM.ATMState.READY) && device.ejections == 0);
         bank.fail = "";
         check(atm.balance() == 100000);
 
@@ -315,7 +331,7 @@ public final class ATMTest {
                     plan.forEach((d,n) -> check(n > 0 && n <= inventory.get(d)));
                 }
             }
-            check(cash.snapshot().equals(inventory));
+            check(readField(cash, "notes").equals(inventory));
         }
         System.out.println("ATM Java scenarios passed, including 540 allocation checks.");
     }

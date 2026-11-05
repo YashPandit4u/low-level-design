@@ -172,13 +172,10 @@ ATM
   + balance() -> long                   // available balance in paise
   + withdraw(amount: long) -> string    // amount in paise
   + cancel() -> void
-  + state() -> ATMState
-  + pendingOperation() -> string | null
-  + cashSnapshot() -> Map<long, int>
   - endSession(outOfService: boolean) -> void
 ```
 
-Python uses `int` for money. Java uses `long` and `Map<Long, Integer>` for note counts. Python's `status()` returns the state and pending ID together. These inspection methods are for tests and maintenance, not account operations.
+Python uses `int` for money. Java uses `long` and `Map<Long, Integer>` for note counts.
 
 `enterPin` returns true when authentication succeeds and false when the bank rejects the card or PIN. Invalid input or an operation in the wrong state raises an error. `withdraw` returns a short result string for an attempted withdrawal:
 
@@ -190,7 +187,7 @@ Python uses `int` for money. Java uses `long` and `Map<Long, Integer>` for note 
 | NOT_DISPENSED | No cash was delivered and the bank confirmed release of the hold. |
 | PENDING_REVIEW | The outcome needs review. Do not treat it as success or retry as a new withdrawal. |
 
-`cancel` ends the session and attempts ejection. It does not promise that a stuck card was physically returned. The controller can read the state to see whether the ATM was taken out of service.
+`cancel` ends the session and attempts ejection. It does not promise that a stuck card was physically returned.
 
 | Current state | Event | Next state |
 | --- | --- | --- |
@@ -214,7 +211,7 @@ A State interface can make sense when each state handles many operations differe
 
 #### Great Solution: Explicit state checks in ATM
 
-For four states and a small set of operations, direct checks are easy to review. Card entry, PIN entry, balance inquiry, and withdrawal check the current state before doing work. Inspection methods remain available in every state. We'll use this approach. If the state behavior grows, we can introduce state classes later.
+For four states and a small set of operations, direct checks are easy to review. Card entry, PIN entry, balance inquiry, and withdrawal check the current state before doing work. We'll use this approach. If the state behavior grows, we can introduce state classes later.
 
 **Our choice**
 
@@ -249,10 +246,9 @@ CashInventory                         // internal to ATM
   + CashInventory(notes: Map<long, int>)
   + plan(amount: long) -> Map<long, int> | null
   + recordDispensed(plan: Map<long, int>) -> void
-  + snapshot() -> Map<long, int>
 ```
 
-ATM owns this object and allows only one operation to use it at a time. The constructor copies the initial stock. A snapshot returns a copy, so changing either map cannot change the machine's stock.
+ATM owns this object and allows only one operation to use it at a time. The constructor copies the initial stock so later changes to the caller's map cannot change the machine's stock.
 
 `plan` returns a separate map, such as `{20000: 3}` for three ₹200 notes. A missing plan means the amount cannot be made. Only ATM passes a successful plan to `recordDispensed`, while still holding its lock. Neither the customer nor the hardware adapter can edit the stored inventory.
 
@@ -362,15 +358,13 @@ This finds a valid bundle with a preference for larger notes. It does not promis
 article += pair(py_methods(['plan'], 'CashInventory'),
                 java_block('Map<Long, Integer> plan') + '\n\n' + java_block('private Map<Long, Integer> findBundle'))
 article += '''
-**Recording delivery and reading stock**
+**Recording delivery**
 
 `record_dispensed` is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of `{20000: 3}`, it subtracts three from the ₹200 count. Planning alone never calls this method.
 
-`snapshot` returns a separate map of counts. Python returns a mutable copy and Java returns an unmodifiable copy. In both cases, the stored inventory stays private.
-
 '''
-article += pair(py_methods(['record_dispensed', 'snapshot'], 'CashInventory'),
-                java_block('void recordDispensed') + '\n\n' + java_block('Map<Long, Integer> snapshot'))
+article += pair(py_methods(['record_dispensed'], 'CashInventory'),
+                java_block('void recordDispensed'))
 article += '''
 ### ATM
 
@@ -468,7 +462,7 @@ Notice that inventory is reduced before capture. Once delivery is confirmed, tho
 '''
 article += pair(py_methods(['withdraw']),java_block('public synchronized String withdraw'))
 article += '''
-There is no automatic retry here. Calling `withdraw` again starts a new operation. In production, a retry needs a stable request ID and a stored outcome. We'll cover that extension below.
+Each accepted withdrawal creates a new operation ID. After PENDING_REVIEW, the ATM rejects further withdrawals. In production, retrying an earlier operation needs a stable request ID and a stored outcome. We'll cover that extension below.
 
 **Cancellation and ending the session**
 
@@ -479,18 +473,9 @@ Cancellation ends a session waiting for a PIN or ready for operations. It does n
 '''
 article += pair(py_methods(['cancel','_end_session']),java_block('public synchronized void cancel')+'\n\n'+java_block('private void endSession'))
 article += '''
-**Inspecting the ATM**
-
-`status` returns the current state and pending operation ID together in Python. Java exposes them through `state` and `pendingOperation`. These are reads, so none of them clears the pending ID.
-
-`cash_snapshot` delegates to the inventory's copying method. All these reads take the same lock as writes. The pending ID identifies the withdrawal to investigate. It does not tell us whether a refund is safe.
-
-'''
-article += pair(py_methods(['status','cash_snapshot']),java_block('public synchronized ATMState state')+'\n\n'+java_block('public synchronized String pendingOperation')+'\n\n'+java_block('public synchronized Map<Long, Integer> cashSnapshot'))
-article += '''
 ### Verification
 
-Walk through the outcomes before adding more features. Use a fake bank with an account balance and a map of active holds. Use a fake dispenser whose result can be set to ALL, NONE, UNKNOWN, or a timeout. This makes failure paths reproducible without real banking or hardware.
+Walk through the outcomes before adding more features. Use a fake bank with an account balance and a map of active holds. Use a fake dispenser whose result can be set to ALL, NONE, UNKNOWN, or a timeout. This makes failure paths reproducible without real banking or hardware. The tests check internal state after operations finish. Python reads the private-by-convention fields, and Java uses reflection in the test file.
 
 #### A successful withdrawal that greedy selection would miss
 
@@ -565,7 +550,7 @@ A failed balance read should leave the authenticated session open because it cha
 
 For cancellation during withdrawal, pause the fake dispenser and start cancellation on another thread. Cancellation must wait without ejecting. After ALL, finish capture and then eject. After UNKNOWN, end out of service and retain the pending ID. The waiting cancellation must not clear it or eject a second time.
 
-Check ownership across the public API too. Authenticate card A, cancel, then authenticate card B. Balance and withdrawal calls must use B's account. The caller never supplies that account ID. Also change the startup stock map and a returned snapshot: neither should change stored stock. Python allows editing its snapshot copy. Java rejects edits to its unmodifiable snapshot.
+Check ownership across the public API too. Authenticate card A, cancel, then authenticate card B. Balance and withdrawal calls must use B's account. The caller never supplies that account ID. Also change the startup stock map after constructing ATM. Stored stock must keep its original counts.
 
 Test a withdrawal exactly at the configured limit. It should succeed when funds and notes are available. A second request for the same note must report CASH_UNAVAILABLE after the first request uses it.
 
@@ -603,7 +588,7 @@ Treat that as UNKNOWN in the current interface. A richer adapter can report the 
 
 **Can we avoid holding a lock during bank calls?**
 
-Yes, but we need an explicit in-progress operation and rules for what other requests can do during it. Holding one lock is easy to reason about for one physical customer session. The trade-off is that balance, cancellation, and status calls wait behind a slow operation. A production controller would keep the screen responsive while refusing conflicting money operations.
+Yes, but we need an explicit in-progress operation and rules for what other requests can do during it. Holding one lock is easy to reason about for one physical customer session. The trade-off is that balance and cancellation calls wait behind a slow operation. A production controller would keep the screen responsive while refusing conflicting money operations.
 
 **How would cash refilling work?**
 

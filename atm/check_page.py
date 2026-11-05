@@ -18,7 +18,7 @@ for box in soup.select('.language-pair'):
     for tab in tabs:
         panel = box.find(id=tab['aria-controls'])
         assert panel and panel['aria-labelledby'] == tab['id']
-assert len(soup.select('.language-pair')) == 11
+assert len(soup.select('.language-pair')) == 10
 assert len(soup.select('.requirements-panel')) == 1
 assert not soup.select('.toc a[href="#withdraw"]')
 assert soup.find(id='verification').find_previous('h2')['id'] == 'implementation'
@@ -49,7 +49,7 @@ test_atm.ATM, test_atm.CashInventory = namespace['ATM'], namespace['CashInventor
 test_atm.ATMState = namespace['ATMState']
 result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_atm))
 assert result.wasSuccessful()
-print('HTML links, IDs, 11 tab pairs, navigation, and assembled Python snippets passed.')
+print('HTML links, IDs, 10 tab pairs, navigation, and assembled Python snippets passed.')
 # Compile and run the Java walkthrough assembled from its displayed panels.
 import subprocess, tempfile
 java_sections = excerpts('java')

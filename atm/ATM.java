@@ -64,8 +64,6 @@ public final class ATM {
             plan.forEach((denomination, count) ->
                     notes.put(denomination, notes.get(denomination) - count));
         }
-
-        Map<Long, Integer> snapshot() { return Map.copyOf(notes); }
     }
 
     private final BankGateway bank;
@@ -168,8 +166,4 @@ public final class ATM {
             state = ATMState.OUT_OF_SERVICE;
         }
     }
-
-    public synchronized ATMState state() { return state; }
-    public synchronized String pendingOperation() { return pending; }
-    public synchronized Map<Long, Integer> cashSnapshot() { return cash.snapshot(); }
 }

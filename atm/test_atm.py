@@ -71,8 +71,8 @@ class ATMTest(unittest.TestCase):
         self.assertEqual(self.atm.withdraw(60000), 'SUCCESS')
         self.assertEqual(self.hardware.dispensed, [{20000: 3}])
         self.assertEqual(self.atm.balance(), 40000)
-        self.assertEqual(self.atm.cash_snapshot(), {50000: 1, 20000: 0})
-        self.assertEqual(self.atm.status(), (ATMState.READY, None))
+        self.assertEqual(self.atm._cash._notes, {50000: 1, 20000: 0})
+        self.assertEqual((self.atm._state, self.atm._pending), (ATMState.READY, None))
 
     def test_invalid_operations(self):
         for action in [lambda: self.atm.balance(), lambda: self.atm.withdraw(20000),
@@ -87,7 +87,7 @@ class ATMTest(unittest.TestCase):
     def test_three_pin_failures_end_session(self):
         self.atm.insert_card('card-A')
         for _ in range(3): self.assertFalse(self.atm.enter_pin('0000'))
-        self.assertEqual(self.atm.status(), (ATMState.IDLE, None))
+        self.assertEqual((self.atm._state, self.atm._pending), (ATMState.IDLE, None))
         self.assertEqual(self.hardware.ejections, 1)
         self.login()
 
@@ -105,7 +105,7 @@ class ATMTest(unittest.TestCase):
         with self.assertRaises(ValueError): self.atm.enter_pin('')
         self.assertTrue(self.atm.enter_pin('1234'))
         with self.assertRaises(ValueError): self.atm.enter_pin('bad')
-        self.assertEqual(self.atm.status(), (ATMState.READY, None))
+        self.assertEqual((self.atm._state, self.atm._pending), (ATMState.READY, None))
         self.atm.cancel()
         self.atm.insert_card('card-A')
         self.assertFalse(self.atm.enter_pin('bad'))
@@ -113,9 +113,9 @@ class ATMTest(unittest.TestCase):
         self.atm.insert_card('card-A')
         for _ in range(2):
             self.assertFalse(self.atm.enter_pin('bad'))
-            self.assertEqual(self.atm.status(), (ATMState.PIN_REQUIRED, None))
+            self.assertEqual((self.atm._state, self.atm._pending), (ATMState.PIN_REQUIRED, None))
         self.assertFalse(self.atm.enter_pin('bad'))
-        self.assertEqual(self.atm.status(), (ATMState.IDLE, None))
+        self.assertEqual((self.atm._state, self.atm._pending), (ATMState.IDLE, None))
         self.assertEqual(self.hardware.ejections, 3)
         with self.assertRaises(ValueError): self.atm.balance()
 
@@ -123,7 +123,7 @@ class ATMTest(unittest.TestCase):
         self.atm.insert_card('card-A')
         self.hardware.eject_fails = True
         for _ in range(3): self.assertFalse(self.atm.enter_pin('bad'))
-        self.assertEqual(self.atm.status(), (ATMState.OUT_OF_SERVICE, None))
+        self.assertEqual((self.atm._state, self.atm._pending), (ATMState.OUT_OF_SERVICE, None))
         self.atm.cancel()
         with self.assertRaises(ValueError): self.atm.insert_card('card-A')
         with self.assertRaises(ValueError): self.atm.enter_pin('1234')
@@ -139,7 +139,7 @@ class ATMTest(unittest.TestCase):
         self.bank.funds = 10000
         self.assertEqual(self.atm.withdraw(20000), 'DECLINED')
         self.assertEqual(self.hardware.dispensed, [])
-        self.assertEqual(self.atm.cash_snapshot()[20000], 3)
+        self.assertEqual(self.atm._cash._notes[20000], 3)
 
     def test_shortage_and_decline_leave_notes_for_later_withdrawal(self):
         self.atm = ATM(self.bank, self.hardware, {50000: 1, 20000: 3}, 200000)
@@ -150,15 +150,15 @@ class ATMTest(unittest.TestCase):
         self.bank.funds = 10000
         self.assertEqual(self.atm.withdraw(60000), 'DECLINED')
         self.assertEqual(self.hardware.dispensed, [])
-        self.assertEqual(self.atm.cash_snapshot(), {50000: 1, 20000: 3})
-        self.assertEqual(self.atm.status(), (ATMState.READY, None))
+        self.assertEqual(self.atm._cash._notes, {50000: 1, 20000: 3})
+        self.assertEqual((self.atm._state, self.atm._pending), (ATMState.READY, None))
         self.bank.funds = 100000
         self.assertEqual(self.atm.withdraw(60000), 'SUCCESS')
         self.assertEqual(self.atm.withdraw(60000), 'CASH_UNAVAILABLE')
         self.assertEqual(self.hardware.dispensed, [{20000: 3}])
         self.assertEqual(self.bank.calls, ['hold', 'hold', 'capture'])
-        self.assertEqual(self.atm.cash_snapshot(), {50000: 1, 20000: 0})
-        self.assertEqual(self.atm.status(), (ATMState.READY, None))
+        self.assertEqual(self.atm._cash._notes, {50000: 1, 20000: 0})
+        self.assertEqual((self.atm._state, self.atm._pending), (ATMState.READY, None))
 
     def test_no_cash_releases_hold(self):
         self.login()
@@ -166,7 +166,7 @@ class ATMTest(unittest.TestCase):
         self.assertEqual(self.atm.withdraw(20000), 'NOT_DISPENSED')
         self.assertEqual(self.bank.holds, {})
         self.assertEqual(self.bank.funds, 100000)
-        self.assertEqual(self.atm.cash_snapshot()[20000], 3)
+        self.assertEqual(self.atm._cash._notes[20000], 3)
 
     def test_unknown_and_timeout_never_release_hold(self):
         for outcome in ['UNKNOWN', 'TIMEOUT', 'unexpected']:
@@ -175,19 +175,19 @@ class ATMTest(unittest.TestCase):
                 self.login()
                 self.hardware.outcome = outcome
                 self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
-                state, pending = self.atm.status()
+                state, pending = (self.atm._state, self.atm._pending)
                 self.assertEqual(state, ATMState.OUT_OF_SERVICE)
                 self.assertIn(pending, self.bank.holds)
                 self.assertNotIn('release', self.bank.calls)
                 self.atm.cancel()
-                self.assertEqual(self.atm.status()[0], ATMState.OUT_OF_SERVICE)
+                self.assertEqual(self.atm._state, ATMState.OUT_OF_SERVICE)
 
     def test_uncertain_withdrawal_and_failed_ejection_preserve_pending(self):
         self.login()
         self.hardware.outcome = 'UNKNOWN'
         self.hardware.eject_fails = True
         self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
-        state, pending = self.atm.status()
+        state, pending = (self.atm._state, self.atm._pending)
         self.assertEqual(state, ATMState.OUT_OF_SERVICE)
         self.assertIn(pending, self.bank.holds)
         self.assertEqual(self.bank.calls, ['hold'])
@@ -196,10 +196,10 @@ class ATMTest(unittest.TestCase):
                        lambda: self.atm.enter_pin('1234'),
                        lambda: self.atm.balance(), lambda: self.atm.withdraw(20000)]:
             with self.assertRaises(ValueError): action()
-        self.assertEqual(self.atm.status(), (state, pending))
+        self.assertEqual((self.atm._state, self.atm._pending), (state, pending))
         self.assertEqual(self.hardware.ejections, 1)
         self.assertEqual(self.hardware.dispensed, [{20000: 1}])
-        self.assertEqual(self.atm.cash_snapshot(), {50000: 1, 20000: 3})
+        self.assertEqual(self.atm._cash._notes, {50000: 1, 20000: 3})
         self.assertEqual(self.bank.funds, 100000)
 
     def test_bank_failure_at_each_money_step(self):
@@ -210,9 +210,9 @@ class ATMTest(unittest.TestCase):
                 self.bank.fail = stage
                 self.hardware.outcome = 'NONE' if stage == 'release' else 'ALL'
                 self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
-                self.assertEqual(self.atm.status()[0], ATMState.OUT_OF_SERVICE)
-                self.assertIsNotNone(self.atm.status()[1])
-                self.assertEqual(self.atm.cash_snapshot()[20000], 2 if stage == 'capture' else 3)
+                self.assertEqual(self.atm._state, ATMState.OUT_OF_SERVICE)
+                self.assertIsNotNone(self.atm._pending)
+                self.assertEqual(self.atm._cash._notes[20000], 2 if stage == 'capture' else 3)
 
     def test_bank_reply_lost_after_success(self):
         for stage in ['capture_after', 'release_after']:
@@ -222,13 +222,13 @@ class ATMTest(unittest.TestCase):
                 self.bank.fail = stage
                 self.hardware.outcome = 'ALL' if stage == 'capture_after' else 'NONE'
                 self.assertEqual(self.atm.withdraw(20000), 'PENDING_REVIEW')
-                state, pending = self.atm.status()
+                state, pending = (self.atm._state, self.atm._pending)
                 self.assertEqual(state, ATMState.OUT_OF_SERVICE)
                 self.assertIsNotNone(pending)
                 self.assertEqual(self.bank.holds, {})
                 delivered = stage == 'capture_after'
                 self.assertEqual(self.bank.funds, 80000 if delivered else 100000)
-                self.assertEqual(self.atm.cash_snapshot()[20000], 2 if delivered else 3)
+                self.assertEqual(self.atm._cash._notes[20000], 2 if delivered else 3)
                 self.assertEqual(self.bank.calls, ['hold', 'capture' if delivered else 'release'])
                 with self.assertRaises(ValueError): self.atm.withdraw(20000)
 
@@ -236,7 +236,7 @@ class ATMTest(unittest.TestCase):
         self.login()
         self.bank.fail = 'balance'
         with self.assertRaises(TimeoutError): self.atm.balance()
-        self.assertEqual(self.atm.status(), (ATMState.READY, None))
+        self.assertEqual((self.atm._state, self.atm._pending), (ATMState.READY, None))
         self.assertEqual(self.hardware.ejections, 0)
         self.bank.fail = None
         self.assertEqual(self.atm.balance(), 100000)
@@ -245,18 +245,13 @@ class ATMTest(unittest.TestCase):
         self.login()
         self.hardware.eject_fails = True
         self.atm.cancel()
-        self.assertEqual(self.atm.status()[0], ATMState.OUT_OF_SERVICE)
+        self.assertEqual(self.atm._state, ATMState.OUT_OF_SERVICE)
 
     def test_authentication_outage_ends_session(self):
         self.atm.insert_card('card-A')
         self.bank.fail = 'authenticate'
         with self.assertRaises(RuntimeError): self.atm.enter_pin('1234')
-        self.assertEqual(self.atm.status()[0], ATMState.OUT_OF_SERVICE)
-
-    def test_snapshots_do_not_expose_inventory(self):
-        snapshot = self.atm.cash_snapshot()
-        snapshot[50000] = 99
-        self.assertEqual(self.atm.cash_snapshot()[50000], 1)
+        self.assertEqual(self.atm._state, ATMState.OUT_OF_SERVICE)
 
     def test_parallel_withdrawals_cannot_spend_same_note(self):
         self.atm = ATM(self.bank, self.hardware, {20000: 1})
@@ -293,7 +288,7 @@ class ATMTest(unittest.TestCase):
                     self.assertEqual(withdrawal.result(2), 'SUCCESS' if outcome == 'ALL' else 'PENDING_REVIEW')
                     cancellation.result(2)
                 self.assertEqual(self.hardware.ejections, 1)
-                state, pending = self.atm.status()
+                state, pending = (self.atm._state, self.atm._pending)
                 self.assertEqual(state, ATMState.IDLE if outcome == 'ALL' else ATMState.OUT_OF_SERVICE)
                 self.assertEqual(pending is None, outcome == 'ALL')
                 self.assertEqual(self.bank.funds, 80000 if outcome == 'ALL' else 100000)
@@ -327,10 +322,8 @@ class ATMTest(unittest.TestCase):
         self.atm = ATM(self.bank, self.hardware, stock, 20000)
         stock[20000] = 99
         self.login()
-        snapshot = self.atm.cash_snapshot()
-        snapshot[20000] = 88
         self.assertEqual(self.atm.withdraw(20000), 'SUCCESS')
-        self.assertEqual(self.atm.cash_snapshot(), {20000: 0})
+        self.assertEqual(self.atm._cash._notes, {20000: 0})
         self.assertEqual(self.atm.withdraw(20000), 'CASH_UNAVAILABLE')
         self.assertEqual(self.bank.funds, 80000)
         self.assertEqual(self.hardware.dispensed, [{20000: 1}])
@@ -347,7 +340,7 @@ class ATMTest(unittest.TestCase):
                 if plan is not None:
                     self.assertEqual(sum(d*n for d, n in plan.items()), amount)
                     self.assertTrue(all(0 < n <= inventory[d] for d, n in plan.items()))
-            self.assertEqual(cash.snapshot(), inventory)
+            self.assertEqual(cash._notes, inventory)
 
 
 if __name__ == '__main__': unittest.main()
