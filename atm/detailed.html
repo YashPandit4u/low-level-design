@@ -379,23 +379,8 @@ Out of scope:
     attempts = 0
     pending = null
 </code></pre></div>
-<p><strong>Inserting a card and entering the PIN</strong></p>
-<p><code>insertCard</code> accepts a card only while idle. It stores the card ID and starts a fresh attempt count. <code>enterPin</code> asks the bank to authenticate that card. It never compares PINs locally or saves the PIN for later.</p>
-<p><strong>Core logic:</strong></p>
-<ol>
-<li>Require a card waiting for authentication.</li>
-<li>Send the card ID and PIN to the bank.</li>
-<li>On success, keep the returned account ID and move to READY.</li>
-<li>On rejection, count the attempt. After the third rejection, end the session and eject.</li>
-</ol>
-<p><strong>Edge cases:</strong></p>
-<ul>
-<li>A second card arrives during a session: reject it without replacing the first card.</li>
-<li>Empty input: reject it before calling the bank. It does not count as a rejected PIN attempt.</li>
-<li>Bank authentication fails with an exception: end the session and take the ATM out of service.</li>
-<li>Repeated PIN submissions after success: reject them because the ATM is already READY.</li>
-</ul>
-<p>Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.</p>
+<p><strong>Inserting a card</strong></p>
+<p><code>insertCard</code> starts a new session. It checks that the ATM is IDLE and the card ID is valid before storing the card, resetting the attempt count, and moving to PIN_REQUIRED. If another session is active, it rejects the new card without replacing the current one.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>insertCard(cardId)
     synchronized(this)
         if state != IDLE
@@ -405,8 +390,24 @@ Out of scope:
         card = cardId
         attempts = 0
         state = PIN_REQUIRED
-
-enterPin(pin)
+</code></pre></div>
+<p><strong>Entering the PIN</strong></p>
+<p><code>enterPin</code> asks the bank to authenticate the inserted card. It never compares PINs locally or saves the PIN for later.</p>
+<p><strong>Core logic:</strong></p>
+<ol>
+<li>Check that the ATM is waiting for a PIN.</li>
+<li>Send the inserted card's ID and PIN to the bank.</li>
+<li>On success, store the returned account ID and move to READY.</li>
+<li>On rejection, count the attempt. After the third rejection, end the session and eject.</li>
+</ol>
+<p><strong>Edge cases:</strong></p>
+<ul>
+<li>No card is waiting for authentication, or authentication already succeeded: reject the call.</li>
+<li>Empty PIN: reject it before calling the bank or counting an attempt.</li>
+<li>Bank authentication throws an error: end the session and take the ATM out of service.</li>
+</ul>
+<p>Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.</p>
+<div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>enterPin(pin)
     synchronized(this)
         if state != PIN_REQUIRED
             throw Error("Insert a card first")
@@ -535,15 +536,16 @@ enterPin(pin)
             return PENDING_REVIEW
 </code></pre></div>
 <p>Each accepted withdrawal creates a new operation ID. After PENDING_REVIEW, the ATM rejects further withdrawals. In production, retrying an earlier operation needs a stable request ID and a stored outcome. We'll cover that extension below.</p>
-<p><strong>Cancellation and ending the session</strong></p>
+<p><strong>Cancelling the session</strong></p>
 <p>Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.</p>
-<p><code>endSession</code> is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.</p>
 <div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Resolve known outcomes and stop on uncertainty</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>cancel()
     synchronized(this)
         if state == PIN_REQUIRED or state == READY
             endSession(false)
-
-endSession(outOfService)
+</code></pre></div>
+<p><strong>Ending the session</strong></p>
+<p><code>endSession</code> is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.</p>
+<div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Resolve known outcomes and stop on uncertainty</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>endSession(outOfService)
     if outOfService
         state = OUT_OF_SERVICE
     else

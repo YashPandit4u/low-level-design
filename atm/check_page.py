@@ -46,6 +46,11 @@ assert all('self.' not in code and 'public synchronized' not in code for code in
 assert all(not line.strip().startswith(('require ', 'under lock', 'on operation error', 'on bank error', 'on ejection error')) for code in soup.select('pre') for line in code.get_text().splitlines())
 assert 'withdraw(amount)' in '\n'.join(walkthrough)
 assert 'findBundle(index, remaining)' in '\n'.join(walkthrough)
+for signature in ['insertCard(cardId)', 'enterPin(pin)', 'cancel()', 'endSession(outOfService)']:
+    panel = next(code for code in walkthrough if code.startswith(signature + '\n'))
+    other_methods = [name for name in ['insertCard(cardId)', 'enterPin(pin)', 'cancel()', 'endSession(outOfService)'] if name != signature]
+    assert all(('\n' + name + '\n') not in panel for name in other_methods), 'Explain each session method in its own block'
+
 
 import subprocess, tempfile, unittest
 python = soup.find(id='complete-code-python').get_text()

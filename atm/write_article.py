@@ -276,25 +276,9 @@ article += sketch("""ATM(bank, hardware, notes, withdrawalLimit)
     attempts = 0
     pending = null""")
 article += '''
-**Inserting a card and entering the PIN**
+**Inserting a card**
 
-`insertCard` accepts a card only while idle. It stores the card ID and starts a fresh attempt count. `enterPin` asks the bank to authenticate that card. It never compares PINs locally or saves the PIN for later.
-
-**Core logic:**
-
-1. Require a card waiting for authentication.
-2. Send the card ID and PIN to the bank.
-3. On success, keep the returned account ID and move to READY.
-4. On rejection, count the attempt. After the third rejection, end the session and eject.
-
-**Edge cases:**
-
-- A second card arrives during a session: reject it without replacing the first card.
-- Empty input: reject it before calling the bank. It does not count as a rejected PIN attempt.
-- Bank authentication fails with an exception: end the session and take the ATM out of service.
-- Repeated PIN submissions after success: reject them because the ATM is already READY.
-
-Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.
+`insertCard` starts a new session. It checks that the ATM is IDLE and the card ID is valid before storing the card, resetting the attempt count, and moving to PIN_REQUIRED. If another session is active, it rejects the new card without replacing the current one.
 
 '''
 article += sketch("""insertCard(cardId)
@@ -305,9 +289,29 @@ article += sketch("""insertCard(cardId)
             throw Error("Card ID required")
         card = cardId
         attempts = 0
-        state = PIN_REQUIRED
+        state = PIN_REQUIRED""")
+article += '''
+**Entering the PIN**
 
-enterPin(pin)
+`enterPin` asks the bank to authenticate the inserted card. It never compares PINs locally or saves the PIN for later.
+
+**Core logic:**
+
+1. Check that the ATM is waiting for a PIN.
+2. Send the inserted card's ID and PIN to the bank.
+3. On success, store the returned account ID and move to READY.
+4. On rejection, count the attempt. After the third rejection, end the session and eject.
+
+**Edge cases:**
+
+- No card is waiting for authentication, or authentication already succeeded: reject the call.
+- Empty PIN: reject it before calling the bank or counting an attempt.
+- Bank authentication throws an error: end the session and take the ATM out of service.
+
+Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.
+
+'''
+article += sketch("""enterPin(pin)
     synchronized(this)
         if state != PIN_REQUIRED
             throw Error("Insert a card first")
@@ -431,19 +435,22 @@ article += sketch("""withdraw(amount)
 article += '''
 Each accepted withdrawal creates a new operation ID. After PENDING_REVIEW, the ATM rejects further withdrawals. In production, retrying an earlier operation needs a stable request ID and a stored outcome. We'll cover that extension below.
 
-**Cancellation and ending the session**
+**Cancelling the session**
 
 Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.
-
-`endSession` is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
 
 '''
 article += sketch("""cancel()
     synchronized(this)
         if state == PIN_REQUIRED or state == READY
-            endSession(false)
+            endSession(false)""")
+article += '''
+**Ending the session**
 
-endSession(outOfService)
+`endSession` is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
+
+'''
+article += sketch("""endSession(outOfService)
     if outOfService
         state = OUT_OF_SERVICE
     else
