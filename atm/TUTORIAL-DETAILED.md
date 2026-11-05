@@ -145,8 +145,6 @@ ATM
   - endSession(outOfService: boolean) -> void
 ```
 
-Python uses `int` for money. Java uses `long` and `Map<Long, Integer>` for note counts.
-
 `enterPin` returns true when authentication succeeds and false when the bank rejects the card or PIN. Invalid input or an operation in the wrong state raises an error. `withdraw` returns a short result string for an attempted withdrawal:
 
 | Result | Meaning for the caller |
@@ -252,7 +250,7 @@ For important operations, we'll explain the **Core logic** and **Edge cases** be
 
 ### ATM
 
-Start with the constructor. It receives the two adapters, the initial cash stock, and a withdrawal limit. We already designed their interfaces above, so we can follow the ATM flow before filling in those dependencies. It creates its own inventory and begins without a card or account. The default Python limit is ₹20,000, written as `2000000` paise.
+Start with the constructor. It receives the two adapters, the initial cash stock, and a withdrawal limit. We already designed their interfaces above, so we can follow the ATM flow before filling in those dependencies. It creates its own inventory and begins without a card or account.
 
 All public operations use the same lock. One physical ATM serves one session at a time, so serial execution is a reasonable starting point. This lock protects local session and cash state. The bank must still protect the account across other ATMs.
 
@@ -650,9 +648,9 @@ ATM has already checked that the amount is positive and within the withdrawal li
 - A larger-note choice gets stuck: try fewer of those notes.
 - Planning fails: leave every count unchanged.
 
-`plan` sorts the denominations and starts the search. Its helper, `find_bundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed returns `None` in Python or `null` in Java.
+`plan` sorts the denominations and starts the search. Its helper, `find_bundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed means that choice cannot produce a valid bundle.
 
-As a successful search returns, each level adds its chosen notes to that map. The code checks `is not None`, rather than whether the map is nonempty, because an empty map is a valid success at the end of the search.
+As a successful search returns, each level adds its chosen notes to the bundle. The search must distinguish an empty successful bundle from a failed search.
 
 The `failed` set remembers combinations of index and remaining amount that could not work. For example, after proving that the smaller notes cannot make ₹100, another path does not need to repeat that search. This cache belongs to one planning call because stock may change before the next withdrawal.
 
@@ -831,7 +829,7 @@ public interface Hardware {
 
 ### ATMState
 
-Define the four states used by ATM. Python imports `Enum` from the standard library. The ATM methods will use these values when checking and changing state.
+ATMState names the four allowed states. ATM owns the rules for moving between them.
 
 
 Python:
@@ -854,7 +852,7 @@ public enum ATMState {
 
 ### Verification
 
-Walk through the outcomes before adding more features. Use a fake bank with an account balance and a map of active holds. Use a fake dispenser whose result can be set to ALL, NONE, UNKNOWN, or a timeout. This makes failure paths reproducible without real banking or hardware. The tests check internal state after operations finish. Python reads the private-by-convention fields, and Java uses reflection in the test file.
+Walk through the outcomes before adding more features. Use a fake bank with an account balance and a map of active holds. Use a fake dispenser whose result can be set to ALL, NONE, UNKNOWN, or a timeout. This makes failure paths reproducible without real banking or hardware. Check the bank balance, note counts, and session state after each operation.
 
 #### A successful withdrawal that greedy selection would miss
 
@@ -947,7 +945,7 @@ The Java tests use Java 21 or later. The Python implementation works with Python
 
 ### Complete reference implementations
 
-The walkthrough excerpts come directly from these files. Python needs the imports at the top of the complete file. Java nests the two interfaces and CashInventory inside ATM to keep the example easy to compile. The design responsibilities are the same in both languages.
+These files contain the complete implementation used in the walkthrough.
 
 Download [atm.py](atm.py) or [ATM.java](ATM.java).
 
