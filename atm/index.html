@@ -223,7 +223,7 @@ Out of scope:
   - account: string | null
   - attempts: int
   - pending: string | null             // unresolved withdrawal operation ID
-  - lock: Lock                         // Java uses this object's monitor
+  - lock: Lock
 
   + ATM(bank: BankGateway, hardware: Hardware,
         notes: Map&lt;long, int&gt;, withdrawalLimit: long)
@@ -360,49 +360,26 @@ Out of scope:
 <li><strong>Hardware:</strong> define cash delivery and card ejection.</li>
 <li><strong>ATMState:</strong> define the allowed states.</li>
 </ul>
-<p>We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the code.</p>
-<p>For important operations, we'll explain the <strong>Core logic</strong> and <strong>Edge cases</strong> before the code. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.</p>
+<p>We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.</p>
+<p>The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the <strong>Core logic</strong> and <strong>Edge cases</strong> before the steps. Simple methods get a shorter explanation. <code>require</code> rejects an invalid operation before it changes state, and <code>under lock</code> holds the ATM lock for the enclosed steps. The tests use a fake bank and dispenser so we can control their responses.</p>
 <h3 id="atm_1">ATM<a aria-label="Link to ATM" class="heading-anchor" href="#atm_1">#</a></h3>
 <p>Start with the constructor. It receives the two adapters, the initial cash stock, and a withdrawal limit. We already designed their interfaces above, so we can follow the ATM flow before filling in those dependencies. It creates its own inventory and begins without a card or account.</p>
 <p>All public operations use the same lock. One physical ATM serves one session at a time, so serial execution is a reasonable starting point. This lock protects local session and cash state. The bank must still protect the account across other ATMs.</p>
-<div class="codebox language-pair" data-code="code-1"><div class="codebar"><div aria-label="ATM language" role="tablist"><button aria-controls="code-1-python" aria-selected="true" data-lang="python" id="code-1-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-1-java" aria-selected="false" data-lang="java" id="code-1-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-1-python-tab" id="code-1-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bank</span><span class="p">:</span> <span class="n">BankGateway</span><span class="p">,</span> <span class="n">hardware</span><span class="p">:</span> <span class="n">Hardware</span><span class="p">,</span>
-             <span class="n">notes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="n">withdrawal_limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2000000</span><span class="p">):</span>
-    <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">withdrawal_limit</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="nb">int</span> <span class="ow">or</span> <span class="n">withdrawal_limit</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Invalid withdrawal limit"</span><span class="p">)</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_bank</span> <span class="o">=</span> <span class="n">bank</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_hardware</span> <span class="o">=</span> <span class="n">hardware</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_cash</span> <span class="o">=</span> <span class="n">CashInventory</span><span class="p">(</span><span class="n">notes</span><span class="p">)</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_limit</span> <span class="o">=</span> <span class="n">withdrawal_limit</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span> <span class="o">=</span> <span class="n">Lock</span><span class="p">()</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">IDLE</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_card</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_account</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_attempts</span> <span class="o">=</span> <span class="mi">0</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-</code></pre><pre aria-labelledby="code-1-java-tab" hidden="" id="code-1-java" role="tabpanel" tabindex="0"><code><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">BankGateway</span><span class="w"> </span><span class="n">bank</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Hardware</span><span class="w"> </span><span class="n">hardware</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CashInventory</span><span class="w"> </span><span class="n">cash</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">withdrawalLimit</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="n">ATMState</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">IDLE</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">card</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">account</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">attempts</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">pending</span><span class="p">;</span>
-
-<span class="kd">public</span><span class="w"> </span><span class="nf">ATM</span><span class="p">(</span><span class="n">BankGateway</span><span class="w"> </span><span class="n">bank</span><span class="p">,</span><span class="w"> </span><span class="n">Hardware</span><span class="w"> </span><span class="n">hardware</span><span class="p">,</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">notes</span><span class="p">,</span>
-<span class="w">           </span><span class="kt">long</span><span class="w"> </span><span class="n">withdrawalLimit</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">withdrawalLimit</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalArgumentException</span><span class="p">(</span><span class="s">"Invalid withdrawal limit"</span><span class="p">);</span>
-<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="na">bank</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bank</span><span class="p">;</span>
-<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="na">hardware</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">hardware</span><span class="p">;</span>
-<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="na">cash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CashInventory</span><span class="p">(</span><span class="n">notes</span><span class="p">);</span>
-<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="na">withdrawalLimit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">withdrawalLimit</span><span class="p">;</span>
-<span class="p">}</span>
+<div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>ATM(bank, hardware, notes, withdrawalLimit)
+    require withdrawalLimit &gt; 0
+    this.bank = bank
+    this.hardware = hardware
+    cash = CashInventory(notes)
+    limit = withdrawalLimit
+    lock = Lock()
+    state = IDLE
+    card = null
+    account = null
+    attempts = 0
+    pending = null
 </code></pre></div>
-
-
-
 <p><strong>Inserting a card and entering the PIN</strong></p>
-<p><code>insert_card</code> accepts a card only while idle. It stores the card ID and starts a fresh attempt count. <code>enter_pin</code> asks the bank to authenticate that card. It never compares PINs locally or saves the PIN for later.</p>
+<p><code>insertCard</code> accepts a card only while idle. It stores the card ID and starts a fresh attempt count. <code>enterPin</code> asks the bank to authenticate that card. It never compares PINs locally or saves the PIN for later.</p>
 <p><strong>Core logic:</strong></p>
 <ol>
 <li>Require a card waiting for authentication.</li>
@@ -418,81 +395,41 @@ Out of scope:
 <li>Repeated PIN submissions after success: reject them because the ATM is already READY.</li>
 </ul>
 <p>Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.</p>
-<div class="codebox language-pair" data-code="code-2"><div class="codebar"><div aria-label="ATM language" role="tablist"><button aria-controls="code-2-python" aria-selected="true" data-lang="python" id="code-2-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-2-java" aria-selected="false" data-lang="java" id="code-2-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-2-python-tab" id="code-2-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">insert_card</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">card_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">!=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">IDLE</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"ATM is not available"</span><span class="p">)</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">card_id</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">card_id</span><span class="o">.</span><span class="n">strip</span><span class="p">():</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Card ID required"</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_card</span> <span class="o">=</span> <span class="n">card_id</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_attempts</span> <span class="o">=</span> <span class="mi">0</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">PIN_REQUIRED</span>
+<div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>insertCard(cardId)
+    under lock
+        require state == IDLE
+        require cardId is not blank
+        card = cardId
+        attempts = 0
+        state = PIN_REQUIRED
 
-<span class="k">def</span><span class="w"> </span><span class="nf">enter_pin</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-    <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">!=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">PIN_REQUIRED</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Insert a card first"</span><span class="p">)</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">pin</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">pin</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"PIN required"</span><span class="p">)</span>
-        <span class="k">try</span><span class="p">:</span>
-            <span class="n">account</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_bank</span><span class="o">.</span><span class="n">authenticate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_card</span><span class="p">,</span> <span class="n">pin</span><span class="p">)</span>
-        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_end_session</span><span class="p">(</span><span class="n">out_of_service</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">"Bank unavailable"</span><span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="kc">None</span>
-        <span class="k">if</span> <span class="n">account</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_attempts</span> <span class="o">+=</span> <span class="mi">1</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_attempts</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_end_session</span><span class="p">()</span>
-            <span class="k">return</span> <span class="kc">False</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_account</span> <span class="o">=</span> <span class="n">account</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">READY</span>
-        <span class="k">return</span> <span class="kc">True</span>
-</code></pre><pre aria-labelledby="code-2-java-tab" hidden="" id="code-2-java" role="tabpanel" tabindex="0"><code><span class="kd">public</span><span class="w"> </span><span class="kd">synchronized</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">insertCard</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">cardId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">state</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">IDLE</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalStateException</span><span class="p">(</span><span class="s">"ATM is not available"</span><span class="p">);</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">cardId</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">cardId</span><span class="p">.</span><span class="na">isBlank</span><span class="p">())</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalArgumentException</span><span class="p">(</span><span class="s">"Card ID required"</span><span class="p">);</span>
-<span class="w">    </span><span class="n">card</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cardId</span><span class="p">;</span>
-<span class="w">    </span><span class="n">attempts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
-<span class="w">    </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">PIN_REQUIRED</span><span class="p">;</span>
-<span class="p">}</span>
+enterPin(pin)
+    under lock
+        require state == PIN_REQUIRED
+        require pin is not empty
+        try
+            authenticatedAccount = bank.authenticate(card, pin)
+        on bank error
+            endSession(true)
+            raise error
 
-<span class="kd">public</span><span class="w"> </span><span class="kd">synchronized</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">enterPin</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">pin</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">state</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">PIN_REQUIRED</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalStateException</span><span class="p">(</span><span class="s">"Insert a card first"</span><span class="p">);</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">pin</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">pin</span><span class="p">.</span><span class="na">isEmpty</span><span class="p">())</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalArgumentException</span><span class="p">(</span><span class="s">"PIN required"</span><span class="p">);</span>
-<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">authenticated</span><span class="p">;</span>
-<span class="w">    </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">authenticated</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bank</span><span class="p">.</span><span class="na">authenticate</span><span class="p">(</span><span class="n">card</span><span class="p">,</span><span class="w"> </span><span class="n">pin</span><span class="p">);</span>
-<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">RuntimeException</span><span class="w"> </span><span class="n">failure</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">endSession</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
-<span class="w">        </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalStateException</span><span class="p">(</span><span class="s">"Bank unavailable"</span><span class="p">);</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">authenticated</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">attempts</span><span class="o">++</span><span class="p">;</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">attempts</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="n">endSession</span><span class="p">(</span><span class="kc">false</span><span class="p">);</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="n">account</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">authenticated</span><span class="p">;</span>
-<span class="w">    </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">READY</span><span class="p">;</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
-<span class="p">}</span>
+        if authenticatedAccount == null
+            attempts += 1
+            if attempts == 3
+                endSession(false)
+            return false
+
+        account = authenticatedAccount
+        state = READY
+        return true
 </code></pre></div>
-
-
-
 <p><strong>Reading the balance</strong></p>
 <p>After authentication, ask the bank for the current available balance. We do not cache it in the ATM because other account activity can change it. If the bank read fails, the error reaches the caller without changing cash or ending the session.</p>
-<div class="codebox language-pair" data-code="code-3"><div class="codebar"><div aria-label="ATM language" role="tablist"><button aria-controls="code-3-python" aria-selected="true" data-lang="python" id="code-3-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-3-java" aria-selected="false" data-lang="java" id="code-3-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-3-python-tab" id="code-3-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">balance</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-    <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">!=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">READY</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Authenticate first"</span><span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_bank</span><span class="o">.</span><span class="n">available_balance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_account</span><span class="p">)</span>
-</code></pre><pre aria-labelledby="code-3-java-tab" hidden="" id="code-3-java" role="tabpanel" tabindex="0"><code><span class="kd">public</span><span class="w"> </span><span class="kd">synchronized</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="nf">balance</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">state</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">READY</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalStateException</span><span class="p">(</span><span class="s">"Authenticate first"</span><span class="p">);</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">bank</span><span class="p">.</span><span class="na">availableBalance</span><span class="p">(</span><span class="n">account</span><span class="p">);</span>
-<span class="p">}</span>
+<div class="codebox"><div class="codebar"><span class="code-title">ATM</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>balance()
+    under lock
+        require state == READY
+        return bank.availableBalance(account)
 </code></pre></div>
-
-
-
 <p><strong>Withdrawing cash</strong></p>
 <p>This is the core operation. We need both a valid cash bundle and reserved bank funds before asking the dispenser to move money.</p>
 <p>Plan the notes first. If the machine cannot make the amount, there is no reason to reserve the customer's funds. Keep the same ATM lock until withdrawal finishes so another call cannot use those notes between planning and delivery. We do not reserve notes in a second data structure because no other operation can change this inventory while the lock is held.</p>
@@ -556,132 +493,66 @@ Out of scope:
 </table>
 <p>The lock prevents two local operations from overlapping. It cannot undo cash delivery or make the bank and dispenser commit together. That is why we still need PENDING_REVIEW even though every ATM method is synchronized.</p>
 <p>Notice that inventory is reduced before capture. Once delivery is confirmed, those notes are gone even if the capture response later times out. For UNKNOWN, the stored counts are only the last confirmed stock. They must not be treated as current stock until maintenance reconciles the machine.</p>
-<div class="codebox language-pair" data-code="code-4"><div class="codebar"><div aria-label="ATM language" role="tablist"><button aria-controls="code-4-python" aria-selected="true" data-lang="python" id="code-4-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-4-java" aria-selected="false" data-lang="java" id="code-4-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-4-python-tab" id="code-4-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">withdraw</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">amount</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-    <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">!=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">READY</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Authenticate first"</span><span class="p">)</span>
-        <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">amount</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="nb">int</span> <span class="ow">or</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;</span> <span class="n">amount</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_limit</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Amount must be positive and within the limit"</span><span class="p">)</span>
-        <span class="n">plan</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cash</span><span class="o">.</span><span class="n">plan</span><span class="p">(</span><span class="n">amount</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">plan</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">return</span> <span class="s2">"CASH_UNAVAILABLE"</span>
-        <span class="n">operation_id</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">uuid4</span><span class="p">())</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span> <span class="o">=</span> <span class="n">operation_id</span>
-        <span class="k">try</span><span class="p">:</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_bank</span><span class="o">.</span><span class="n">hold</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_account</span><span class="p">,</span> <span class="n">amount</span><span class="p">,</span> <span class="n">operation_id</span><span class="p">):</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span> <span class="o">=</span> <span class="kc">None</span>
-                <span class="k">return</span> <span class="s2">"DECLINED"</span>
-            <span class="n">outcome</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hardware</span><span class="o">.</span><span class="n">dispense</span><span class="p">(</span><span class="nb">dict</span><span class="p">(</span><span class="n">plan</span><span class="p">))</span>
-            <span class="k">if</span> <span class="n">outcome</span> <span class="o">==</span> <span class="s2">"NONE"</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_bank</span><span class="o">.</span><span class="n">release</span><span class="p">(</span><span class="n">operation_id</span><span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span> <span class="o">=</span> <span class="kc">None</span>
-                <span class="k">return</span> <span class="s2">"NOT_DISPENSED"</span>
-            <span class="k">if</span> <span class="n">outcome</span> <span class="o">!=</span> <span class="s2">"ALL"</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_end_session</span><span class="p">(</span><span class="n">out_of_service</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-                <span class="k">return</span> <span class="s2">"PENDING_REVIEW"</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_cash</span><span class="o">.</span><span class="n">record_dispensed</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_bank</span><span class="o">.</span><span class="n">capture</span><span class="p">(</span><span class="n">operation_id</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span> <span class="o">=</span> <span class="kc">None</span>
-            <span class="k">return</span> <span class="s2">"SUCCESS"</span>
-        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
-            <span class="c1"># A timeout does not prove that the last operation failed.</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_end_session</span><span class="p">(</span><span class="n">out_of_service</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-            <span class="k">return</span> <span class="s2">"PENDING_REVIEW"</span>
-</code></pre><pre aria-labelledby="code-4-java-tab" hidden="" id="code-4-java" role="tabpanel" tabindex="0"><code><span class="kd">public</span><span class="w"> </span><span class="kd">synchronized</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">withdraw</span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="n">amount</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">state</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">READY</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalStateException</span><span class="p">(</span><span class="s">"Authenticate first"</span><span class="p">);</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">amount</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">amount</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">withdrawalLimit</span><span class="p">)</span>
-<span class="w">        </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalArgumentException</span><span class="p">(</span><span class="s">"Amount must be positive and within the limit"</span><span class="p">);</span>
-<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cash</span><span class="p">.</span><span class="na">plan</span><span class="p">(</span><span class="n">amount</span><span class="p">);</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">plan</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s">"CASH_UNAVAILABLE"</span><span class="p">;</span>
-<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">operationId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">UUID</span><span class="p">.</span><span class="na">randomUUID</span><span class="p">().</span><span class="na">toString</span><span class="p">();</span>
-<span class="w">    </span><span class="n">pending</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">operationId</span><span class="p">;</span>
-<span class="w">    </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">bank</span><span class="p">.</span><span class="na">hold</span><span class="p">(</span><span class="n">account</span><span class="p">,</span><span class="w"> </span><span class="n">amount</span><span class="p">,</span><span class="w"> </span><span class="n">operationId</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="n">pending</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">"DECLINED"</span><span class="p">;</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">        </span><span class="n">String</span><span class="w"> </span><span class="n">outcome</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">hardware</span><span class="p">.</span><span class="na">dispense</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">copyOf</span><span class="p">(</span><span class="n">plan</span><span class="p">));</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="s">"NONE"</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">outcome</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="n">bank</span><span class="p">.</span><span class="na">release</span><span class="p">(</span><span class="n">operationId</span><span class="p">);</span>
-<span class="w">            </span><span class="n">pending</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">"NOT_DISPENSED"</span><span class="p">;</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="s">"ALL"</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">outcome</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="n">endSession</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">"PENDING_REVIEW"</span><span class="p">;</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">        </span><span class="n">cash</span><span class="p">.</span><span class="na">recordDispensed</span><span class="p">(</span><span class="n">plan</span><span class="p">);</span>
-<span class="w">        </span><span class="n">bank</span><span class="p">.</span><span class="na">capture</span><span class="p">(</span><span class="n">operationId</span><span class="p">);</span>
-<span class="w">        </span><span class="n">pending</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"SUCCESS"</span><span class="p">;</span>
-<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">RuntimeException</span><span class="w"> </span><span class="n">failure</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">endSession</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"PENDING_REVIEW"</span><span class="p">;</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="p">}</span>
+<div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Resolve known outcomes and stop on uncertainty</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>withdraw(amount)
+    under lock
+        require state == READY
+        require 0 &lt; amount &lt;= limit
+        plan = cash.plan(amount)
+        if plan == null
+            return CASH_UNAVAILABLE
+
+        operationId = generateId()
+        pending = operationId
+        try
+            if !bank.hold(account, amount, operationId)
+                pending = null
+                return DECLINED
+
+            outcome = hardware.dispense(copy(plan))
+            if outcome == NONE
+                bank.release(operationId)
+                pending = null
+                return NOT_DISPENSED
+
+            if outcome != ALL
+                endSession(true)
+                return PENDING_REVIEW
+
+            cash.recordDispensed(plan)
+            bank.capture(operationId)
+            pending = null
+            return SUCCESS
+        on operation error
+            endSession(true)
+            return PENDING_REVIEW
 </code></pre></div>
-
-
-
 <p>Each accepted withdrawal creates a new operation ID. After PENDING_REVIEW, the ATM rejects further withdrawals. In production, retrying an earlier operation needs a stable request ID and a stored outcome. We'll cover that extension below.</p>
 <p><strong>Cancellation and ending the session</strong></p>
 <p>Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.</p>
-<p><code>end_session</code> is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.</p>
-<div class="codebox language-pair" data-code="code-5"><div class="codebar"><div aria-label="ATM language" role="tablist"><button aria-controls="code-5-python" aria-selected="true" data-lang="python" id="code-5-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-5-java" aria-selected="false" data-lang="java" id="code-5-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-5-python-tab" id="code-5-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">cancel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="ow">in</span> <span class="p">(</span><span class="n">ATMState</span><span class="o">.</span><span class="n">PIN_REQUIRED</span><span class="p">,</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">READY</span><span class="p">):</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_end_session</span><span class="p">()</span>
+<p><code>endSession</code> is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.</p>
+<div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Resolve known outcomes and stop on uncertainty</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>cancel()
+    under lock
+        if state == PIN_REQUIRED or state == READY
+            endSession(false)
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_end_session</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">out_of_service</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">OUT_OF_SERVICE</span> <span class="k">if</span> <span class="n">out_of_service</span> <span class="k">else</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">IDLE</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_card</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_account</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_attempts</span> <span class="o">=</span> <span class="mi">0</span>
-    <span class="k">try</span><span class="p">:</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_hardware</span><span class="o">.</span><span class="n">eject_card</span><span class="p">()</span>
-    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_state</span> <span class="o">=</span> <span class="n">ATMState</span><span class="o">.</span><span class="n">OUT_OF_SERVICE</span>
-</code></pre><pre aria-labelledby="code-5-java-tab" hidden="" id="code-5-java" role="tabpanel" tabindex="0"><code><span class="kd">public</span><span class="w"> </span><span class="kd">synchronized</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">cancel</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">state</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">PIN_REQUIRED</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">READY</span><span class="p">)</span><span class="w"> </span><span class="n">endSession</span><span class="p">(</span><span class="kc">false</span><span class="p">);</span>
-<span class="p">}</span>
-
-<span class="kd">private</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">endSession</span><span class="p">(</span><span class="kt">boolean</span><span class="w"> </span><span class="n">outOfService</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">outOfService</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">OUT_OF_SERVICE</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">IDLE</span><span class="p">;</span>
-<span class="w">    </span><span class="n">card</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
-<span class="w">    </span><span class="n">account</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
-<span class="w">    </span><span class="n">attempts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
-<span class="w">    </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">hardware</span><span class="p">.</span><span class="na">ejectCard</span><span class="p">();</span>
-<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">RuntimeException</span><span class="w"> </span><span class="n">failure</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ATMState</span><span class="p">.</span><span class="na">OUT_OF_SERVICE</span><span class="p">;</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="p">}</span>
+endSession(outOfService)
+    state = OUT_OF_SERVICE if outOfService else IDLE
+    card = null
+    account = null
+    attempts = 0
+    // Keep pending until the withdrawal is resolved.
+    try
+        hardware.ejectCard()
+    on ejection error
+        state = OUT_OF_SERVICE
 </code></pre></div>
-
-
-
 <h3 id="cashinventory_1">CashInventory<a aria-label="Link to CashInventory" class="heading-anchor" href="#cashinventory_1">#</a></h3>
 <p>Start with the stock we were given at startup. The constructor rejects nonpositive denominations and negative counts. Zero counts are valid: a cassette may be empty. Copy the map so later changes to the caller's configuration cannot change the ATM's stock.</p>
-<div class="codebox language-pair" data-code="code-6"><div class="codebar"><div aria-label="CashInventory language" role="tablist"><button aria-controls="code-6-python" aria-selected="true" data-lang="python" id="code-6-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-6-java" aria-selected="false" data-lang="java" id="code-6-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-6-python-tab" id="code-6-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">notes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]):</span>
-    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">d</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="nb">int</span> <span class="ow">or</span> <span class="n">d</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="nb">type</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="nb">int</span> <span class="ow">or</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="mi">0</span>
-           <span class="k">for</span> <span class="n">d</span><span class="p">,</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">notes</span><span class="o">.</span><span class="n">items</span><span class="p">()):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Invalid denomination or note count"</span><span class="p">)</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_notes</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">notes</span><span class="p">)</span>
-</code></pre><pre aria-labelledby="code-6-java-tab" hidden="" id="code-6-java" role="tabpanel" tabindex="0"><code><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">notes</span><span class="p">;</span>
-
-<span class="n">CashInventory</span><span class="p">(</span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">notes</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">entry</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">notes</span><span class="p">.</span><span class="na">entrySet</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">entry</span><span class="p">.</span><span class="na">getKey</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="na">getKey</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">0</span>
-<span class="w">                </span><span class="o">||</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="na">getValue</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="na">getValue</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">IllegalArgumentException</span><span class="p">(</span><span class="s">"Invalid denomination or note count"</span><span class="p">);</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="na">notes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashMap</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">notes</span><span class="p">);</span>
-<span class="p">}</span>
+<div class="codebox"><div class="codebar"><span class="code-title">CashInventory</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>CashInventory(initialNotes)
+    for denomination, count in initialNotes
+        require denomination &gt; 0 and count &gt;= 0
+    notes = copy(initialNotes)
 </code></pre></div>
-
-
-
 <p><strong>Planning the bundle</strong></p>
 <p>Let's decide how to choose notes. Suppose the ATM has one ₹500 note and three ₹200 notes. A customer asks for ₹600. Taking ₹500 first gets stuck, but three ₹200 notes work.</p>
 <details class="comparison bad"><summary><span class="comparison-title">Bad Solution: Take the largest note and never reconsider</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>Greedy selection is short, but it rejects that valid ₹600 withdrawal. Checking total cash first does not fix the problem. We need a combination that respects both denominations and counts.</p></div></details>
@@ -706,7 +577,7 @@ Out of scope:
 <li>A larger-note choice gets stuck: try fewer of those notes.</li>
 <li>Planning fails: leave every count unchanged.</li>
 </ul>
-<p><code>plan</code> sorts the denominations and starts the search. Its helper, <code>find_bundle</code>, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed means that choice cannot produce a valid bundle.</p>
+<p><code>plan</code> sorts the denominations and starts the search. Its helper, <code>findBundle</code>, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed means that choice cannot produce a valid bundle.</p>
 <p>As a successful search returns, each level adds its chosen notes to the bundle. The search must distinguish an empty successful bundle from a failed search.</p>
 <p>The <code>failed</code> set remembers combinations of index and remaining amount that could not work. For example, after proving that the smaller notes cannot make ₹100, another path does not need to repeat that search. This cache belongs to one planning call because stock may change before the next withdrawal.</p>
 <p>Why is the cache key just <code>(index, remaining)</code>? Earlier choices used only larger denominations. They did not change the stock of any denomination still ahead of us. The same index and remainder therefore describe the same remaining problem within this call.</p>
@@ -722,138 +593,60 @@ Return {20000: 3} in paise. Stock is still unchanged.
 </code></pre></div>
 <p>Trying zero is essential. Without that choice, the search would never discover a bundle made entirely from smaller notes.</p>
 <p>This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.</p>
-<div class="codebox language-pair" data-code="code-7"><div class="codebar"><div aria-label="CashInventory language" role="tablist"><button aria-controls="code-7-python" aria-selected="true" data-lang="python" id="code-7-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-7-java" aria-selected="false" data-lang="java" id="code-7-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-7-python-tab" id="code-7-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">amount</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="c1"># The ATM has already validated the amount. Planning changes no stock.</span>
-    <span class="n">denominations</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_notes</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="n">failed</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+<div class="codebox"><div class="codebar"><span class="code-title">Good Solution: Build a dynamic programming table</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>plan(amount)
+    denominations = sort notes' denominations from largest to smallest
+    failed = empty set
+    return findBundle(0, amount)
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">find_bundle</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">remaining</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">remaining</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">return</span> <span class="p">{}</span>
-        <span class="k">if</span> <span class="n">index</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">denominations</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">remaining</span><span class="p">)</span> <span class="ow">in</span> <span class="n">failed</span><span class="p">:</span>
-            <span class="k">return</span> <span class="kc">None</span>
-        <span class="n">denomination</span> <span class="o">=</span> <span class="n">denominations</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
-        <span class="n">limit</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_notes</span><span class="p">[</span><span class="n">denomination</span><span class="p">],</span> <span class="n">remaining</span> <span class="o">//</span> <span class="n">denomination</span><span class="p">)</span>
-        <span class="k">for</span> <span class="n">count</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">limit</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">):</span>
-            <span class="n">rest</span> <span class="o">=</span> <span class="n">find_bundle</span><span class="p">(</span><span class="n">index</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">remaining</span> <span class="o">-</span> <span class="n">count</span> <span class="o">*</span> <span class="n">denomination</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">rest</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="k">if</span> <span class="n">count</span><span class="p">:</span>
-                    <span class="n">rest</span><span class="p">[</span><span class="n">denomination</span><span class="p">]</span> <span class="o">=</span> <span class="n">count</span>
-                <span class="k">return</span> <span class="n">rest</span>
-        <span class="n">failed</span><span class="o">.</span><span class="n">add</span><span class="p">((</span><span class="n">index</span><span class="p">,</span> <span class="n">remaining</span><span class="p">))</span>
-        <span class="k">return</span> <span class="kc">None</span>
+findBundle(index, remaining)             // helper within this planning call
+    if remaining == 0
+        return empty map
+    if index == denominations.size or (index, remaining) in failed
+        return null
 
-    <span class="k">return</span> <span class="n">find_bundle</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">amount</span><span class="p">)</span>
-</code></pre><pre aria-labelledby="code-7-java-tab" hidden="" id="code-7-java" role="tabpanel" tabindex="0"><code><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">plan</span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="n">amount</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">denominations</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">notes</span><span class="p">.</span><span class="na">keySet</span><span class="p">());</span>
-<span class="w">    </span><span class="n">denominations</span><span class="p">.</span><span class="na">sort</span><span class="p">(</span><span class="n">Comparator</span><span class="p">.</span><span class="na">reverseOrder</span><span class="p">());</span>
-<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">failed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashMap</span><span class="o">&lt;</span><span class="n">Integer</span><span class="p">,</span><span class="w"> </span><span class="n">Set</span><span class="o">&lt;</span><span class="n">Long</span><span class="o">&gt;&gt;</span><span class="p">();</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">findBundle</span><span class="p">(</span><span class="n">denominations</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">amount</span><span class="p">,</span><span class="w"> </span><span class="n">failed</span><span class="p">);</span>
-<span class="p">}</span>
+    denomination = denominations[index]
+    limit = min(notes[denomination], floor(remaining / denomination))
+    for count from limit down to 0
+        rest = findBundle(index + 1, remaining - count * denomination)
+        if rest != null
+            if count &gt; 0
+                rest[denomination] = count
+            return rest
 
-<span class="kd">private</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">findBundle</span><span class="p">(</span><span class="n">List</span><span class="o">&lt;</span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="n">denominations</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">index</span><span class="p">,</span>
-<span class="w">        </span><span class="kt">long</span><span class="w"> </span><span class="n">remaining</span><span class="p">,</span><span class="w"> </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Integer</span><span class="p">,</span><span class="w"> </span><span class="n">Set</span><span class="o">&lt;</span><span class="n">Long</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">failed</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">remaining</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashMap</span><span class="o">&lt;&gt;</span><span class="p">();</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">index</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">denominations</span><span class="p">.</span><span class="na">size</span><span class="p">()</span>
-<span class="w">            </span><span class="o">||</span><span class="w"> </span><span class="n">failed</span><span class="p">.</span><span class="na">getOrDefault</span><span class="p">(</span><span class="n">index</span><span class="p">,</span><span class="w"> </span><span class="n">Set</span><span class="p">.</span><span class="na">of</span><span class="p">()).</span><span class="na">contains</span><span class="p">(</span><span class="n">remaining</span><span class="p">))</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
-<span class="w">    </span><span class="kt">long</span><span class="w"> </span><span class="n">denomination</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">denominations</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">index</span><span class="p">);</span>
-<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="n">Math</span><span class="p">.</span><span class="na">min</span><span class="p">(</span><span class="n">notes</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">denomination</span><span class="p">),</span><span class="w"> </span><span class="n">remaining</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">denomination</span><span class="p">);</span>
-<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">limit</span><span class="p">;</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">count</span><span class="o">--</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="n">rest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">findBundle</span><span class="p">(</span><span class="n">denominations</span><span class="p">,</span><span class="w"> </span><span class="n">index</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<span class="w">                </span><span class="n">remaining</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">denomination</span><span class="p">,</span><span class="w"> </span><span class="n">failed</span><span class="p">);</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">rest</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">count</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="n">rest</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">denomination</span><span class="p">,</span><span class="w"> </span><span class="n">count</span><span class="p">);</span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">rest</span><span class="p">;</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="n">failed</span><span class="p">.</span><span class="na">computeIfAbsent</span><span class="p">(</span><span class="n">index</span><span class="p">,</span><span class="w"> </span><span class="n">unused</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;&gt;</span><span class="p">()).</span><span class="na">add</span><span class="p">(</span><span class="n">remaining</span><span class="p">);</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
-<span class="p">}</span>
+    failed.add((index, remaining))
+    return null
 </code></pre></div>
-
-
-
 <p><strong>Recording delivery</strong></p>
-<p><code>record_dispensed</code> is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of <code>{20000: 3}</code>, it subtracts three from the ₹200 count. Planning alone never calls this method.</p>
-<div class="codebox language-pair" data-code="code-8"><div class="codebar"><div aria-label="CashInventory language" role="tablist"><button aria-controls="code-8-python" aria-selected="true" data-lang="python" id="code-8-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-8-java" aria-selected="false" data-lang="java" id="code-8-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-8-python-tab" id="code-8-python" role="tabpanel" tabindex="0"><code><span class="k">def</span><span class="w"> </span><span class="nf">record_dispensed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="c1"># Only the owning ATM calls this, with its unchanged, successful plan.</span>
-    <span class="k">for</span> <span class="n">denomination</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">plan</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_notes</span><span class="p">[</span><span class="n">denomination</span><span class="p">]</span> <span class="o">-=</span> <span class="n">count</span>
-</code></pre><pre aria-labelledby="code-8-java-tab" hidden="" id="code-8-java" role="tabpanel" tabindex="0"><code><span class="kt">void</span><span class="w"> </span><span class="nf">recordDispensed</span><span class="p">(</span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">plan</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">plan</span><span class="p">.</span><span class="na">forEach</span><span class="p">((</span><span class="n">denomination</span><span class="p">,</span><span class="w"> </span><span class="n">count</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span>
-<span class="w">            </span><span class="n">notes</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">denomination</span><span class="p">,</span><span class="w"> </span><span class="n">notes</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">denomination</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">count</span><span class="p">));</span>
-<span class="p">}</span>
+<p><code>recordDispensed</code> is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of <code>{20000: 3}</code>, it subtracts three from the ₹200 count. Planning alone never calls this method.</p>
+<div class="codebox"><div class="codebar"><span class="code-title">Good Solution: Build a dynamic programming table</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>recordDispensed(plan)
+    for denomination, count in plan
+        notes[denomination] -= count
 </code></pre></div>
-
-
-
 <h3 id="bankgateway_1">BankGateway<a aria-label="Link to BankGateway" class="heading-anchor" href="#bankgateway_1">#</a></h3>
 <p>The bank interface provides authentication, available-balance inquiry, and hold operations. Authentication returns an account ID or a rejected result. A rejected hold returns false, while an exception leaves its outcome uncertain.</p>
 <p>Each adapter call waits for a result or times out. The bank adapter must not call ATM methods while ATM is waiting for it, because ATM still holds the lock.</p>
-<div class="codebox language-pair" data-code="code-9"><div class="codebar"><div aria-label="BankGateway language" role="tablist"><button aria-controls="code-9-python" aria-selected="true" data-lang="python" id="code-9-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-9-java" aria-selected="false" data-lang="java" id="code-9-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-9-python-tab" id="code-9-python" role="tabpanel" tabindex="0"><code><span class="k">class</span><span class="w"> </span><span class="nc">BankGateway</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">authenticate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">card_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">"""Return an account ID, or None for a rejected card/PIN."""</span>
-        <span class="o">...</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">available_balance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">account_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span> <span class="o">...</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">hold</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">account_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">amount</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">operation_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">"""Atomically reserve funds. False means definitely declined, no hold."""</span>
-        <span class="o">...</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">capture</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">operation_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">"""Turn this hold into a posted debit."""</span>
-        <span class="o">...</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">release</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">operation_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">"""Cancel this hold without debiting the account."""</span>
-        <span class="o">...</span>
-</code></pre><pre aria-labelledby="code-9-java-tab" hidden="" id="code-9-java" role="tabpanel" tabindex="0"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">BankGateway</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="nf">authenticate</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">cardId</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">pin</span><span class="p">);</span><span class="w"> </span><span class="c1">// null means rejected</span>
-<span class="w">    </span><span class="kt">long</span><span class="w"> </span><span class="nf">availableBalance</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">accountId</span><span class="p">);</span>
-<span class="w">    </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">hold</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">accountId</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">amount</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">operationId</span><span class="p">);</span>
-<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">capture</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">operationId</span><span class="p">);</span>
-<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">release</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">operationId</span><span class="p">);</span>
-<span class="p">}</span>
+<div class="codebox"><div class="codebar"><span class="code-title">BankGateway</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>interface BankGateway
+    authenticate(cardId, pin) -&gt; accountId or null
+    availableBalance(accountId) -&gt; amount
+    hold(accountId, amount, operationId) -&gt; boolean
+    capture(operationId)
+    release(operationId)
 </code></pre></div>
-
-
-
 <h3 id="hardware_1">Hardware<a aria-label="Link to Hardware" class="heading-anchor" href="#hardware_1">#</a></h3>
 <p>The hardware interface handles dispensing and card ejection. <code>dispense</code> reports ALL, NONE, or UNKNOWN according to the delivery guarantees defined above. A timeout does not prove that the external action stopped. Failed ejection raises an error so ATM can take the machine out of service.</p>
 <p>The hardware adapter must also avoid calling ATM methods while ATM holds its lock.</p>
-<div class="codebox language-pair" data-code="code-10"><div class="codebar"><div aria-label="Hardware language" role="tablist"><button aria-controls="code-10-python" aria-selected="true" data-lang="python" id="code-10-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-10-java" aria-selected="false" data-lang="java" id="code-10-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-10-python-tab" id="code-10-python" role="tabpanel" tabindex="0"><code><span class="k">class</span><span class="w"> </span><span class="nc">Hardware</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">dispense</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">notes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">"""ALL: exact bundle delivered. NONE: no cash left the machine.</span>
-<span class="sd">        UNKNOWN: delivery is uncertain, including partial delivery.</span>
-<span class="sd">        """</span>
-        <span class="o">...</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">eject_card</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
-</code></pre><pre aria-labelledby="code-10-java-tab" hidden="" id="code-10-java" role="tabpanel" tabindex="0"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Hardware</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// ALL: exact bundle delivered. NONE: nothing delivered.</span>
-<span class="w">    </span><span class="c1">// UNKNOWN: uncertain or partial delivery.</span>
-<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="nf">dispense</span><span class="p">(</span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">notes</span><span class="p">);</span>
-<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">ejectCard</span><span class="p">();</span>
-<span class="p">}</span>
+<div class="codebox"><div class="codebar"><span class="code-title">Hardware</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>interface Hardware
+    dispense(notes) -&gt; ALL, NONE, or UNKNOWN
+    ejectCard()
 </code></pre></div>
-
-
-
 <h3 id="atmstate">ATMState<a aria-label="Link to ATMState" class="heading-anchor" href="#atmstate">#</a></h3>
 <p>ATMState names the four allowed states. ATM owns the rules for moving between them.</p>
-<div class="codebox language-pair" data-code="code-11"><div class="codebar"><div aria-label="ATMState language" role="tablist"><button aria-controls="code-11-python" aria-selected="true" data-lang="python" id="code-11-python-tab" role="tab" tabindex="0">Python</button><button aria-controls="code-11-java" aria-selected="false" data-lang="java" id="code-11-java-tab" role="tab" tabindex="-1">Java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="code-11-python-tab" id="code-11-python" role="tabpanel" tabindex="0"><code><span class="k">class</span><span class="w"> </span><span class="nc">ATMState</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
-    <span class="n">IDLE</span> <span class="o">=</span> <span class="s2">"IDLE"</span>
-    <span class="n">PIN_REQUIRED</span> <span class="o">=</span> <span class="s2">"PIN_REQUIRED"</span>
-    <span class="n">READY</span> <span class="o">=</span> <span class="s2">"READY"</span>
-    <span class="n">OUT_OF_SERVICE</span> <span class="o">=</span> <span class="s2">"OUT_OF_SERVICE"</span>
-</code></pre><pre aria-labelledby="code-11-java-tab" hidden="" id="code-11-java" role="tabpanel" tabindex="0"><code><span class="kd">public</span><span class="w"> </span><span class="kd">enum</span><span class="w"> </span><span class="n">ATMState</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">IDLE</span><span class="p">,</span><span class="w"> </span><span class="n">PIN_REQUIRED</span><span class="p">,</span><span class="w"> </span><span class="n">READY</span><span class="p">,</span><span class="w"> </span><span class="n">OUT_OF_SERVICE</span>
-<span class="p">}</span>
+<div class="codebox"><div class="codebar"><span class="code-title">ATMState</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>enum ATMState
+    IDLE
+    PIN_REQUIRED
+    READY
+    OUT_OF_SERVICE
 </code></pre></div>
-
-
-
 <h3 id="verification">Verification<a aria-label="Link to Verification" class="heading-anchor" href="#verification">#</a></h3>
 <p>Walk through the outcomes before adding more features. Use a fake bank with an account balance and a map of active holds. Use a fake dispenser whose result can be set to ALL, NONE, UNKNOWN, or a timeout. This makes failure paths reproducible without real banking or hardware. Check the bank balance, note counts, and session state after each operation.</p>
 <h4 id="a-successful-withdrawal-that-greedy-selection-would-miss">A successful withdrawal that greedy selection would miss</h4>
@@ -953,7 +746,7 @@ java<span class="w"> </span>-cp<span class="w"> </span>/tmp/atm-java<span class=
 </code></pre></div>
 <p>The Java tests use Java 21 or later. The Python implementation works with Python 3.9 or later. Download <a href="test_atm.py">Python tests</a> or <a href="ATMTest.java">Java tests</a> to inspect the fakes and assertions.</p>
 <h3 id="complete-reference-implementations">Complete Code Implementation<a aria-label="Link to Complete Code Implementation" class="heading-anchor" href="#complete-reference-implementations">#</a></h3>
-<p>These files contain the complete implementation used in the walkthrough.</p><div class="codebox language-pair full-code" data-code="complete-code"><div class="codebar"><div aria-label="Complete implementation language" role="tablist"><button aria-controls="complete-code-python" aria-selected="true" data-lang="python" id="complete-code-python-tab" role="tab" tabindex="0">atm.py</button><button aria-controls="complete-code-java" aria-selected="false" data-lang="java" id="complete-code-java-tab" role="tab" tabindex="-1">ATM.java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="complete-code-python-tab" id="complete-code-python" role="tabpanel" tabindex="0"><code><span class="sd">"""ATM teaching implementation. All amounts are integer paise."""</span>
+<p>The complete Python and Java implementations below follow the same design and flows as the pseudocode. They include the language-specific details needed to run the solution.</p><div class="codebox language-pair full-code" data-code="complete-code"><div class="codebar"><div aria-label="Complete implementation language" role="tablist"><button aria-controls="complete-code-python" aria-selected="true" data-lang="python" id="complete-code-python-tab" role="tab" tabindex="0">atm.py</button><button aria-controls="complete-code-java" aria-selected="false" data-lang="java" id="complete-code-java-tab" role="tab" tabindex="-1">ATM.java</button></div><button aria-label="Copy visible code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre aria-labelledby="complete-code-python-tab" id="complete-code-python" role="tabpanel" tabindex="0"><code><span class="sd">"""ATM teaching implementation. All amounts are integer paise."""</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">enum</span><span class="w"> </span><span class="kn">import</span> <span class="n">Enum</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">threading</span><span class="w"> </span><span class="kn">import</span> <span class="n">Lock</span>

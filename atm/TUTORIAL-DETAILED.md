@@ -133,7 +133,7 @@ ATM
   - account: string | null
   - attempts: int
   - pending: string | null             // unresolved withdrawal operation ID
-  - lock: Lock                         // Java uses this object's monitor
+  - lock: Lock
 
   + ATM(bank: BankGateway, hardware: Hardware,
         notes: Map<long, int>, withdrawalLimit: long)
@@ -244,9 +244,9 @@ Here is what we will implement:
 - **Hardware:** define cash delivery and card ejection.
 - **ATMState:** define the allowed states.
 
-We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the code.
+We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.
 
-For important operations, we'll explain the **Core logic** and **Edge cases** before the code. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.
+The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the **Core logic** and **Edge cases** before the steps. Simple methods get a shorter explanation. `require` rejects an invalid operation before it changes state, and `under lock` holds the ATM lock for the enclosed steps. The tests use a fake bank and dispenser so we can control their responses.
 
 ### ATM
 
@@ -255,51 +255,24 @@ Start with the constructor. It receives the two adapters, the initial cash stock
 All public operations use the same lock. One physical ATM serves one session at a time, so serial execution is a reasonable starting point. This lock protects local session and cash state. The bank must still protect the account across other ATMs.
 
 
-Python:
-
-```python
-def __init__(self, bank: BankGateway, hardware: Hardware,
-             notes: dict[int, int], withdrawal_limit: int = 2000000):
-    if type(withdrawal_limit) is not int or withdrawal_limit <= 0:
-        raise ValueError("Invalid withdrawal limit")
-    self._bank = bank
-    self._hardware = hardware
-    self._cash = CashInventory(notes)
-    self._limit = withdrawal_limit
-    self._lock = Lock()
-    self._state = ATMState.IDLE
-    self._card: str | None = None
-    self._account: str | None = None
-    self._attempts = 0
-    self._pending: str | None = None
-```
-
-Java:
-
-```java
-private final BankGateway bank;
-private final Hardware hardware;
-private final CashInventory cash;
-private final long withdrawalLimit;
-private ATMState state = ATMState.IDLE;
-private String card;
-private String account;
-private int attempts;
-private String pending;
-
-public ATM(BankGateway bank, Hardware hardware, Map<Long, Integer> notes,
-           long withdrawalLimit) {
-    if (withdrawalLimit <= 0) throw new IllegalArgumentException("Invalid withdrawal limit");
-    this.bank = bank;
-    this.hardware = hardware;
-    this.cash = new CashInventory(notes);
-    this.withdrawalLimit = withdrawalLimit;
-}
+```text
+ATM(bank, hardware, notes, withdrawalLimit)
+    require withdrawalLimit > 0
+    this.bank = bank
+    this.hardware = hardware
+    cash = CashInventory(notes)
+    limit = withdrawalLimit
+    lock = Lock()
+    state = IDLE
+    card = null
+    account = null
+    attempts = 0
+    pending = null
 ```
 
 **Inserting a card and entering the PIN**
 
-`insert_card` accepts a card only while idle. It stores the card ID and starts a fresh attempt count. `enter_pin` asks the bank to authenticate that card. It never compares PINs locally or saves the PIN for later.
+`insertCard` accepts a card only while idle. It stores the card ID and starts a fresh attempt count. `enterPin` asks the bank to authenticate that card. It never compares PINs locally or saves the PIN for later.
 
 **Core logic:**
 
@@ -318,70 +291,34 @@ public ATM(BankGateway bank, Hardware hardware, Map<Long, Integer> notes,
 Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.
 
 
-Python:
+```text
+insertCard(cardId)
+    under lock
+        require state == IDLE
+        require cardId is not blank
+        card = cardId
+        attempts = 0
+        state = PIN_REQUIRED
 
-```python
-def insert_card(self, card_id: str) -> None:
-    with self._lock:
-        if self._state != ATMState.IDLE:
-            raise ValueError("ATM is not available")
-        if not isinstance(card_id, str) or not card_id.strip():
-            raise ValueError("Card ID required")
-        self._card = card_id
-        self._attempts = 0
-        self._state = ATMState.PIN_REQUIRED
+enterPin(pin)
+    under lock
+        require state == PIN_REQUIRED
+        require pin is not empty
+        try
+            authenticatedAccount = bank.authenticate(card, pin)
+        on bank error
+            endSession(true)
+            raise error
 
-def enter_pin(self, pin: str) -> bool:
-    with self._lock:
-        if self._state != ATMState.PIN_REQUIRED:
-            raise ValueError("Insert a card first")
-        if not isinstance(pin, str) or not pin:
-            raise ValueError("PIN required")
-        try:
-            account = self._bank.authenticate(self._card, pin)
-        except Exception:
-            self._end_session(out_of_service=True)
-            raise RuntimeError("Bank unavailable") from None
-        if account is None:
-            self._attempts += 1
-            if self._attempts == 3:
-                self._end_session()
-            return False
-        self._account = account
-        self._state = ATMState.READY
-        return True
-```
+        if authenticatedAccount == null
+            attempts += 1
+            if attempts == 3
+                endSession(false)
+            return false
 
-Java:
-
-```java
-public synchronized void insertCard(String cardId) {
-    if (state != ATMState.IDLE) throw new IllegalStateException("ATM is not available");
-    if (cardId == null || cardId.isBlank()) throw new IllegalArgumentException("Card ID required");
-    card = cardId;
-    attempts = 0;
-    state = ATMState.PIN_REQUIRED;
-}
-
-public synchronized boolean enterPin(String pin) {
-    if (state != ATMState.PIN_REQUIRED) throw new IllegalStateException("Insert a card first");
-    if (pin == null || pin.isEmpty()) throw new IllegalArgumentException("PIN required");
-    String authenticated;
-    try {
-        authenticated = bank.authenticate(card, pin);
-    } catch (RuntimeException failure) {
-        endSession(true);
-        throw new IllegalStateException("Bank unavailable");
-    }
-    if (authenticated == null) {
-        attempts++;
-        if (attempts == 3) endSession(false);
-        return false;
-    }
-    account = authenticated;
-    state = ATMState.READY;
-    return true;
-}
+        account = authenticatedAccount
+        state = READY
+        return true
 ```
 
 **Reading the balance**
@@ -389,23 +326,11 @@ public synchronized boolean enterPin(String pin) {
 After authentication, ask the bank for the current available balance. We do not cache it in the ATM because other account activity can change it. If the bank read fails, the error reaches the caller without changing cash or ending the session.
 
 
-Python:
-
-```python
-def balance(self) -> int:
-    with self._lock:
-        if self._state != ATMState.READY:
-            raise ValueError("Authenticate first")
-        return self._bank.available_balance(self._account)
-```
-
-Java:
-
-```java
-public synchronized long balance() {
-    if (state != ATMState.READY) throw new IllegalStateException("Authenticate first");
-    return bank.availableBalance(account);
-}
+```text
+balance()
+    under lock
+        require state == READY
+        return bank.availableBalance(account)
 ```
 
 **Withdrawing cash**
@@ -462,77 +387,39 @@ The lock prevents two local operations from overlapping. It cannot undo cash del
 Notice that inventory is reduced before capture. Once delivery is confirmed, those notes are gone even if the capture response later times out. For UNKNOWN, the stored counts are only the last confirmed stock. They must not be treated as current stock until maintenance reconciles the machine.
 
 
-Python:
+```text
+withdraw(amount)
+    under lock
+        require state == READY
+        require 0 < amount <= limit
+        plan = cash.plan(amount)
+        if plan == null
+            return CASH_UNAVAILABLE
 
-```python
-def withdraw(self, amount: int) -> str:
-    with self._lock:
-        if self._state != ATMState.READY:
-            raise ValueError("Authenticate first")
-        if type(amount) is not int or not 0 < amount <= self._limit:
-            raise ValueError("Amount must be positive and within the limit")
-        plan = self._cash.plan(amount)
-        if plan is None:
-            return "CASH_UNAVAILABLE"
-        operation_id = str(uuid4())
-        self._pending = operation_id
-        try:
-            if not self._bank.hold(self._account, amount, operation_id):
-                self._pending = None
-                return "DECLINED"
-            outcome = self._hardware.dispense(dict(plan))
-            if outcome == "NONE":
-                self._bank.release(operation_id)
-                self._pending = None
-                return "NOT_DISPENSED"
-            if outcome != "ALL":
-                self._end_session(out_of_service=True)
-                return "PENDING_REVIEW"
-            self._cash.record_dispensed(plan)
-            self._bank.capture(operation_id)
-            self._pending = None
-            return "SUCCESS"
-        except Exception:
-            # A timeout does not prove that the last operation failed.
-            self._end_session(out_of_service=True)
-            return "PENDING_REVIEW"
-```
+        operationId = generateId()
+        pending = operationId
+        try
+            if !bank.hold(account, amount, operationId)
+                pending = null
+                return DECLINED
 
-Java:
+            outcome = hardware.dispense(copy(plan))
+            if outcome == NONE
+                bank.release(operationId)
+                pending = null
+                return NOT_DISPENSED
 
-```java
-public synchronized String withdraw(long amount) {
-    if (state != ATMState.READY) throw new IllegalStateException("Authenticate first");
-    if (amount <= 0 || amount > withdrawalLimit)
-        throw new IllegalArgumentException("Amount must be positive and within the limit");
-    var plan = cash.plan(amount);
-    if (plan == null) return "CASH_UNAVAILABLE";
-    String operationId = UUID.randomUUID().toString();
-    pending = operationId;
-    try {
-        if (!bank.hold(account, amount, operationId)) {
-            pending = null;
-            return "DECLINED";
-        }
-        String outcome = hardware.dispense(Map.copyOf(plan));
-        if ("NONE".equals(outcome)) {
-            bank.release(operationId);
-            pending = null;
-            return "NOT_DISPENSED";
-        }
-        if (!"ALL".equals(outcome)) {
-            endSession(true);
-            return "PENDING_REVIEW";
-        }
-        cash.recordDispensed(plan);
-        bank.capture(operationId);
-        pending = null;
-        return "SUCCESS";
-    } catch (RuntimeException failure) {
-        endSession(true);
-        return "PENDING_REVIEW";
-    }
-}
+            if outcome != ALL
+                endSession(true)
+                return PENDING_REVIEW
+
+            cash.recordDispensed(plan)
+            bank.capture(operationId)
+            pending = null
+            return SUCCESS
+        on operation error
+            endSession(true)
+            return PENDING_REVIEW
 ```
 
 Each accepted withdrawal creates a new operation ID. After PENDING_REVIEW, the ATM rejects further withdrawals. In production, retrying an earlier operation needs a stable request ID and a stored outcome. We'll cover that extension below.
@@ -541,46 +428,25 @@ Each accepted withdrawal creates a new operation ID. After PENDING_REVIEW, the A
 
 Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.
 
-`end_session` is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
+`endSession` is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
 
 
-Python:
+```text
+cancel()
+    under lock
+        if state == PIN_REQUIRED or state == READY
+            endSession(false)
 
-```python
-def cancel(self) -> None:
-    with self._lock:
-        if self._state in (ATMState.PIN_REQUIRED, ATMState.READY):
-            self._end_session()
-
-def _end_session(self, out_of_service: bool = False) -> None:
-    self._state = ATMState.OUT_OF_SERVICE if out_of_service else ATMState.IDLE
-    self._card = None
-    self._account = None
-    self._attempts = 0
-    try:
-        self._hardware.eject_card()
-    except Exception:
-        self._state = ATMState.OUT_OF_SERVICE
-```
-
-Java:
-
-```java
-public synchronized void cancel() {
-    if (state == ATMState.PIN_REQUIRED || state == ATMState.READY) endSession(false);
-}
-
-private void endSession(boolean outOfService) {
-    state = outOfService ? ATMState.OUT_OF_SERVICE : ATMState.IDLE;
-    card = null;
-    account = null;
-    attempts = 0;
-    try {
-        hardware.ejectCard();
-    } catch (RuntimeException failure) {
-        state = ATMState.OUT_OF_SERVICE;
-    }
-}
+endSession(outOfService)
+    state = OUT_OF_SERVICE if outOfService else IDLE
+    card = null
+    account = null
+    attempts = 0
+    // Keep pending until the withdrawal is resolved.
+    try
+        hardware.ejectCard()
+    on ejection error
+        state = OUT_OF_SERVICE
 ```
 
 ### CashInventory
@@ -588,30 +454,11 @@ private void endSession(boolean outOfService) {
 Start with the stock we were given at startup. The constructor rejects nonpositive denominations and negative counts. Zero counts are valid: a cassette may be empty. Copy the map so later changes to the caller's configuration cannot change the ATM's stock.
 
 
-Python:
-
-```python
-def __init__(self, notes: dict[int, int]):
-    if any(type(d) is not int or d <= 0 or type(n) is not int or n < 0
-           for d, n in notes.items()):
-        raise ValueError("Invalid denomination or note count")
-    self._notes = dict(notes)
-```
-
-Java:
-
-```java
-private final Map<Long, Integer> notes;
-
-CashInventory(Map<Long, Integer> notes) {
-    for (var entry : notes.entrySet()) {
-        if (entry.getKey() == null || entry.getKey() <= 0
-                || entry.getValue() == null || entry.getValue() < 0) {
-            throw new IllegalArgumentException("Invalid denomination or note count");
-        }
-    }
-    this.notes = new HashMap<>(notes);
-}
+```text
+CashInventory(initialNotes)
+    for denomination, count in initialNotes
+        require denomination > 0 and count >= 0
+    notes = copy(initialNotes)
 ```
 
 **Planning the bundle**
@@ -648,7 +495,7 @@ ATM has already checked that the amount is positive and within the withdrawal li
 - A larger-note choice gets stuck: try fewer of those notes.
 - Planning fails: leave every count unchanged.
 
-`plan` sorts the denominations and starts the search. Its helper, `find_bundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed means that choice cannot produce a valid bundle.
+`plan` sorts the denominations and starts the search. Its helper, `findBundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed means that choice cannot produce a valid bundle.
 
 As a successful search returns, each level adds its chosen notes to the bundle. The search must distinguish an empty successful bundle from a failed search.
 
@@ -674,84 +521,40 @@ Trying zero is essential. Without that choice, the search would never discover a
 This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.
 
 
-Python:
+```text
+plan(amount)
+    denominations = sort notes' denominations from largest to smallest
+    failed = empty set
+    return findBundle(0, amount)
 
-```python
-def plan(self, amount: int) -> dict[int, int] | None:
-    # The ATM has already validated the amount. Planning changes no stock.
-    denominations = sorted(self._notes, reverse=True)
-    failed = set()
+findBundle(index, remaining)             // helper within this planning call
+    if remaining == 0
+        return empty map
+    if index == denominations.size or (index, remaining) in failed
+        return null
 
-    def find_bundle(index, remaining):
-        if remaining == 0:
-            return {}
-        if index == len(denominations) or (index, remaining) in failed:
-            return None
-        denomination = denominations[index]
-        limit = min(self._notes[denomination], remaining // denomination)
-        for count in range(limit, -1, -1):
-            rest = find_bundle(index + 1, remaining - count * denomination)
-            if rest is not None:
-                if count:
-                    rest[denomination] = count
-                return rest
-        failed.add((index, remaining))
-        return None
+    denomination = denominations[index]
+    limit = min(notes[denomination], floor(remaining / denomination))
+    for count from limit down to 0
+        rest = findBundle(index + 1, remaining - count * denomination)
+        if rest != null
+            if count > 0
+                rest[denomination] = count
+            return rest
 
-    return find_bundle(0, amount)
-```
-
-Java:
-
-```java
-Map<Long, Integer> plan(long amount) {
-    var denominations = new ArrayList<>(notes.keySet());
-    denominations.sort(Comparator.reverseOrder());
-    var failed = new HashMap<Integer, Set<Long>>();
-    return findBundle(denominations, 0, amount, failed);
-}
-
-private Map<Long, Integer> findBundle(List<Long> denominations, int index,
-        long remaining, Map<Integer, Set<Long>> failed) {
-    if (remaining == 0) return new HashMap<>();
-    if (index == denominations.size()
-            || failed.getOrDefault(index, Set.of()).contains(remaining)) return null;
-    long denomination = denominations.get(index);
-    int limit = (int) Math.min(notes.get(denomination), remaining / denomination);
-    for (int count = limit; count >= 0; count--) {
-        var rest = findBundle(denominations, index + 1,
-                remaining - count * denomination, failed);
-        if (rest != null) {
-            if (count > 0) rest.put(denomination, count);
-            return rest;
-        }
-    }
-    failed.computeIfAbsent(index, unused -> new HashSet<>()).add(remaining);
-    return null;
-}
+    failed.add((index, remaining))
+    return null
 ```
 
 **Recording delivery**
 
-`record_dispensed` is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of `{20000: 3}`, it subtracts three from the ₹200 count. Planning alone never calls this method.
+`recordDispensed` is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of `{20000: 3}`, it subtracts three from the ₹200 count. Planning alone never calls this method.
 
 
-Python:
-
-```python
-def record_dispensed(self, plan: dict[int, int]) -> None:
-    # Only the owning ATM calls this, with its unchanged, successful plan.
-    for denomination, count in plan.items():
-        self._notes[denomination] -= count
-```
-
-Java:
-
-```java
-void recordDispensed(Map<Long, Integer> plan) {
-    plan.forEach((denomination, count) ->
-            notes.put(denomination, notes.get(denomination) - count));
-}
+```text
+recordDispensed(plan)
+    for denomination, count in plan
+        notes[denomination] -= count
 ```
 
 ### BankGateway
@@ -761,39 +564,13 @@ The bank interface provides authentication, available-balance inquiry, and hold 
 Each adapter call waits for a result or times out. The bank adapter must not call ATM methods while ATM is waiting for it, because ATM still holds the lock.
 
 
-Python:
-
-```python
-class BankGateway(Protocol):
-    def authenticate(self, card_id: str, pin: str) -> str | None:
-        """Return an account ID, or None for a rejected card/PIN."""
-        ...
-
-    def available_balance(self, account_id: str) -> int: ...
-
-    def hold(self, account_id: str, amount: int, operation_id: str) -> bool:
-        """Atomically reserve funds. False means definitely declined, no hold."""
-        ...
-
-    def capture(self, operation_id: str) -> None:
-        """Turn this hold into a posted debit."""
-        ...
-
-    def release(self, operation_id: str) -> None:
-        """Cancel this hold without debiting the account."""
-        ...
-```
-
-Java:
-
-```java
-public interface BankGateway {
-    String authenticate(String cardId, String pin); // null means rejected
-    long availableBalance(String accountId);
-    boolean hold(String accountId, long amount, String operationId);
-    void capture(String operationId);
-    void release(String operationId);
-}
+```text
+interface BankGateway
+    authenticate(cardId, pin) -> accountId or null
+    availableBalance(accountId) -> amount
+    hold(accountId, amount, operationId) -> boolean
+    capture(operationId)
+    release(operationId)
 ```
 
 ### Hardware
@@ -803,28 +580,10 @@ The hardware interface handles dispensing and card ejection. `dispense` reports 
 The hardware adapter must also avoid calling ATM methods while ATM holds its lock.
 
 
-Python:
-
-```python
-class Hardware(Protocol):
-    def dispense(self, notes: dict[int, int]) -> str:
-        """ALL: exact bundle delivered. NONE: no cash left the machine.
-        UNKNOWN: delivery is uncertain, including partial delivery.
-        """
-        ...
-
-    def eject_card(self) -> None: ...
-```
-
-Java:
-
-```java
-public interface Hardware {
-    // ALL: exact bundle delivered. NONE: nothing delivered.
-    // UNKNOWN: uncertain or partial delivery.
-    String dispense(Map<Long, Integer> notes);
-    void ejectCard();
-}
+```text
+interface Hardware
+    dispense(notes) -> ALL, NONE, or UNKNOWN
+    ejectCard()
 ```
 
 ### ATMState
@@ -832,22 +591,12 @@ public interface Hardware {
 ATMState names the four allowed states. ATM owns the rules for moving between them.
 
 
-Python:
-
-```python
-class ATMState(Enum):
-    IDLE = "IDLE"
-    PIN_REQUIRED = "PIN_REQUIRED"
-    READY = "READY"
-    OUT_OF_SERVICE = "OUT_OF_SERVICE"
-```
-
-Java:
-
-```java
-public enum ATMState {
-    IDLE, PIN_REQUIRED, READY, OUT_OF_SERVICE
-}
+```text
+enum ATMState
+    IDLE
+    PIN_REQUIRED
+    READY
+    OUT_OF_SERVICE
 ```
 
 ### Verification
@@ -945,7 +694,7 @@ The Java tests use Java 21 or later. The Python implementation works with Python
 
 ### Complete reference implementations
 
-These files contain the complete implementation used in the walkthrough.
+The complete Python and Java implementations below follow the same design and flows as the pseudocode. They include the language-specific details needed to run the solution.
 
 Download [atm.py](atm.py) or [ATM.java](ATM.java).
 

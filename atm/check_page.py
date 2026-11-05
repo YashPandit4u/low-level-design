@@ -18,7 +18,8 @@ for box in soup.select('.language-pair'):
     for tab in tabs:
         panel = box.find(id=tab['aria-controls'])
         assert panel and panel['aria-labelledby'] == tab['id']
-assert len(soup.select('.language-pair')) == 12
+assert len(soup.select('.language-pair')) == 1
+assert soup.select_one('.language-pair')['data-code'] == 'complete-code'
 assert len(soup.select('.requirements-panel')) == 1
 assert not soup.select('.toc a[href="#withdraw"]')
 assert soup.find(id='verification').find_previous('h2')['id'] == 'implementation'
@@ -30,46 +31,37 @@ for heading in soup.find(id='implementation').find_all_next(['h2', 'h3']):
     implementation_headings.append(heading['id'])
 assert implementation_headings[:5] == ['atm_1', 'cashinventory_1', 'bankgateway_1', 'hardware_1', 'atmstate'], 'Implementation must proceed from ATM to its dependencies'
 
-# Group displayed excerpts by their owning class, not by panel position.
-def excerpts(language):
-    sections = {}
-    for panel in soup.select(f'.language-pair pre[id$="-{language}"]'):
-        if panel['id'].startswith('complete-code'): continue
-        heading = panel.find_previous('h3')['id']
-        sections.setdefault(heading, []).append(panel.get_text())
-    return sections
+# The walkthrough teaches design with pseudocode. Runnable languages appear only
+# in the complete implementation section, whose content must match source files.
+implementation = soup.find(id='implementation')
+complete = soup.find(id='complete-reference-implementations')
+walkthrough = []
+for node in implementation.find_all_next():
+    if node is complete:
+        break
+    if node.name == 'pre':
+        walkthrough.append(node.get_text())
+assert len(walkthrough) >= 11
+assert all('self.' not in code and 'public synchronized' not in code for code in walkthrough)
+assert 'withdraw(amount)' in '\n'.join(walkthrough)
+assert 'findBundle(index, remaining)' in '\n'.join(walkthrough)
 
-import textwrap
-blocks = excerpts('python')
-imports = 'from __future__ import annotations\nfrom enum import Enum\nfrom threading import Lock\nfrom typing import Protocol\nfrom uuid import uuid4\n'
-dependency_sections = ['atmstate', 'bankgateway_1', 'hardware_1']
-assembled = imports + '\n\n'.join(code for heading in dependency_sections for code in blocks[heading])
-for heading, name in [('cashinventory_1', 'CashInventory'), ('atm_1', 'ATM')]:
-    assembled += f'\n\nclass {name}:\n'
-    assembled += '\n\n'.join(textwrap.indent(code,'    ') for code in blocks[heading])
-for heading in dependency_sections:
-    classes = [node for node in ast.parse('\n'.join(blocks[heading])).body if isinstance(node, ast.ClassDef)]
-    assert len(classes) == 1, 'Each dependency must have its own implementation section'
-original_classes = {n.name: ast.dump(n) for n in ast.parse((ROOT/'atm.py').read_text()).body if isinstance(n, ast.ClassDef)}
-shown_classes = {n.name: ast.dump(n) for n in ast.parse(assembled).body if isinstance(n, ast.ClassDef)}
-assert shown_classes == original_classes, 'Displayed Python class differs from source'
-namespace = {'__name__':'article_atm'}
-exec(compile(assembled, '<article>', 'exec'),namespace)
-import test_atm, unittest
-test_atm.ATM, test_atm.CashInventory = namespace['ATM'], namespace['CashInventory']
+import subprocess, tempfile, unittest
+python = soup.find(id='complete-code-python').get_text()
+java = soup.find(id='complete-code-java').get_text()
+assert python.rstrip() == (ROOT/'atm.py').read_text().rstrip()
+assert java.rstrip() == (ROOT/'ATM.java').read_text().rstrip()
+namespace = {'__name__': 'article_atm'}
+exec(compile(python, '<article>', 'exec'), namespace)
+import test_atm
+test_atm.ATM = namespace['ATM']
+test_atm.CashInventory = namespace['CashInventory']
 test_atm.ATMState = namespace['ATMState']
 result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_atm))
 assert result.wasSuccessful()
-print('HTML links, IDs, 12 tab pairs, navigation, and assembled Python snippets passed.')
-# Compile and run the Java walkthrough assembled from its displayed panels.
-import subprocess, tempfile
-java_sections = excerpts('java')
-java_blocks = [code for heading in dependency_sections for code in java_sections[heading]] + [
-    'static final class CashInventory {\n' + '\n'.join(java_sections['cashinventory_1']) + '\n}'
-] + java_sections['atm_1']
 with tempfile.TemporaryDirectory(prefix='atm-article-') as folder:
     folder = Path(folder)
-    (folder/'ATM.java').write_text('import java.util.*;\npublic final class ATM {\n' + '\n'.join(java_blocks) + '\n}\n')
-    subprocess.run(['javac','-d',str(folder),str(folder/'ATM.java'),str(ROOT/'ATMTest.java')],check=True)
-    subprocess.run(['java','-cp',str(folder),'ATMTest'],check=True)
-print('Assembled Java article snippets passed the Java behavior tests.')
+    (folder/'ATM.java').write_text(java)
+    subprocess.run(['javac', '-d', str(folder), str(folder/'ATM.java'), str(ROOT/'ATMTest.java')], check=True)
+    subprocess.run(['java', '-cp', str(folder), 'ATMTest'], check=True)
+print('Pseudocode walkthrough, class order, links, IDs, final code tabs, and complete implementations passed.')

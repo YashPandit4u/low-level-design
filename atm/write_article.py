@@ -1,32 +1,9 @@
-"""Build the article from prose and exact, tested source excerpts."""
+"""Build the design walkthrough with language-neutral pseudocode."""
 from pathlib import Path
-import ast
-import textwrap
 ROOT = Path(__file__).resolve().parent
-python = (ROOT/'atm.py').read_text()
-java = (ROOT/'ATM.java').read_text()
-tree = ast.parse(python)
 
-def py_class(name):
-    node = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name)
-    return '\n'.join(python.splitlines()[node.lineno-1:node.end_lineno])
-
-def py_methods(names, class_name='ATM'):
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name)
-    nodes = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
-    return '\n\n'.join(textwrap.dedent('\n'.join(python.splitlines()[n.lineno-1:n.end_lineno])) for n in nodes)
-
-def java_block(start):
-    offset = java.index(start)
-    opening = java.index('{', offset)
-    depth = 1; end = opening+1
-    while depth:
-        depth += (java[end] == '{') - (java[end] == '}')
-        end += 1
-    return textwrap.dedent(java[java.rfind('\n',0,offset)+1:end])
-
-def pair(p,j):
-    return '\nPython:\n\n```python\n'+p+'\n```\n\nJava:\n\n```java\n'+j+'\n```\n'
+def sketch(code):
+    return '\n```text\n' + code + '\n```\n'
 
 article = '''# ATM Low Level Design
 
@@ -163,7 +140,7 @@ ATM
   - account: string | null
   - attempts: int
   - pending: string | null             // unresolved withdrawal operation ID
-  - lock: Lock                         // Java uses this object's monitor
+  - lock: Lock
 
   + ATM(bank: BankGateway, hardware: Hardware,
         notes: Map<long, int>, withdrawalLimit: long)
@@ -274,9 +251,9 @@ Here is what we will implement:
 - **Hardware:** define cash delivery and card ejection.
 - **ATMState:** define the allowed states.
 
-We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the code.
+We'll start with ATM, the class the controller calls. Then we'll implement CashInventory and define the bank and hardware contracts that ATM uses. We'll finish with the state enum. Each class has its own section, with its methods explained before the pseudocode. The final code section contains complete Python and Java implementations.
 
-For important operations, we'll explain the **Core logic** and **Edge cases** before the code. Simple methods get a shorter explanation. The tests use a fake bank and dispenser so we can control their responses.
+The walkthrough uses language-neutral pseudocode. For important operations, we'll explain the **Core logic** and **Edge cases** before the steps. Simple methods get a shorter explanation. `require` rejects an invalid operation before it changes state, and `under lock` holds the ATM lock for the enclosed steps. The tests use a fake bank and dispenser so we can control their responses.
 
 ### ATM
 
@@ -285,12 +262,22 @@ Start with the constructor. It receives the two adapters, the initial cash stock
 All public operations use the same lock. One physical ATM serves one session at a time, so serial execution is a reasonable starting point. This lock protects local session and cash state. The bank must still protect the account across other ATMs.
 
 '''
-fields = java[java.index('    private final BankGateway bank;'):java.index('    public ATM(')]
-article += pair(py_methods(['__init__']), textwrap.dedent(fields)+java_block('public ATM('))
+article += sketch("""ATM(bank, hardware, notes, withdrawalLimit)
+    require withdrawalLimit > 0
+    this.bank = bank
+    this.hardware = hardware
+    cash = CashInventory(notes)
+    limit = withdrawalLimit
+    lock = Lock()
+    state = IDLE
+    card = null
+    account = null
+    attempts = 0
+    pending = null""")
 article += '''
 **Inserting a card and entering the PIN**
 
-`insert_card` accepts a card only while idle. It stores the card ID and starts a fresh attempt count. `enter_pin` asks the bank to authenticate that card. It never compares PINs locally or saves the PIN for later.
+`insertCard` accepts a card only while idle. It stores the card ID and starts a fresh attempt count. `enterPin` asks the bank to authenticate that card. It never compares PINs locally or saves the PIN for later.
 
 **Core logic:**
 
@@ -309,14 +296,43 @@ article += '''
 Reinserting a card starts a new attempt count. Blocking that card across all ATMs belongs to the bank.
 
 '''
-article += pair(py_methods(['insert_card','enter_pin']),java_block('public synchronized void insertCard')+'\n\n'+java_block('public synchronized boolean enterPin'))
+article += sketch("""insertCard(cardId)
+    under lock
+        require state == IDLE
+        require cardId is not blank
+        card = cardId
+        attempts = 0
+        state = PIN_REQUIRED
+
+enterPin(pin)
+    under lock
+        require state == PIN_REQUIRED
+        require pin is not empty
+        try
+            authenticatedAccount = bank.authenticate(card, pin)
+        on bank error
+            endSession(true)
+            raise error
+
+        if authenticatedAccount == null
+            attempts += 1
+            if attempts == 3
+                endSession(false)
+            return false
+
+        account = authenticatedAccount
+        state = READY
+        return true""")
 article += '''
 **Reading the balance**
 
 After authentication, ask the bank for the current available balance. We do not cache it in the ATM because other account activity can change it. If the bank read fails, the error reaches the caller without changing cash or ending the session.
 
 '''
-article += pair(py_methods(['balance']), java_block('public synchronized long balance'))
+article += sketch("""balance()
+    under lock
+        require state == READY
+        return bank.availableBalance(account)""")
 article += '''
 **Withdrawing cash**
 
@@ -372,7 +388,38 @@ The lock prevents two local operations from overlapping. It cannot undo cash del
 Notice that inventory is reduced before capture. Once delivery is confirmed, those notes are gone even if the capture response later times out. For UNKNOWN, the stored counts are only the last confirmed stock. They must not be treated as current stock until maintenance reconciles the machine.
 
 '''
-article += pair(py_methods(['withdraw']),java_block('public synchronized String withdraw'))
+article += sketch("""withdraw(amount)
+    under lock
+        require state == READY
+        require 0 < amount <= limit
+        plan = cash.plan(amount)
+        if plan == null
+            return CASH_UNAVAILABLE
+
+        operationId = generateId()
+        pending = operationId
+        try
+            if !bank.hold(account, amount, operationId)
+                pending = null
+                return DECLINED
+
+            outcome = hardware.dispense(copy(plan))
+            if outcome == NONE
+                bank.release(operationId)
+                pending = null
+                return NOT_DISPENSED
+
+            if outcome != ALL
+                endSession(true)
+                return PENDING_REVIEW
+
+            cash.recordDispensed(plan)
+            bank.capture(operationId)
+            pending = null
+            return SUCCESS
+        on operation error
+            endSession(true)
+            return PENDING_REVIEW""")
 article += '''
 Each accepted withdrawal creates a new operation ID. After PENDING_REVIEW, the ATM rejects further withdrawals. In production, retrying an earlier operation needs a stable request ID and a stored outcome. We'll cover that extension below.
 
@@ -380,18 +427,34 @@ Each accepted withdrawal creates a new operation ID. After PENDING_REVIEW, the A
 
 Cancellation ends a session waiting for a PIN or ready for operations. It does nothing while idle, and it cannot reopen an out-of-service ATM. Because operations are serialized, cancellation waits for a running withdrawal to finish. It cannot interrupt physical dispensing halfway through.
 
-`end_session` is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
+`endSession` is shared by cancellation, the third rejected PIN, authentication outages, and uncertain withdrawals. It removes the card and account from session memory and attempts ejection. It deliberately preserves a pending operation ID. Failed ejection leaves the machine out of service.
 
 '''
-article += pair(py_methods(['cancel','_end_session']),java_block('public synchronized void cancel')+'\n\n'+java_block('private void endSession'))
+article += sketch("""cancel()
+    under lock
+        if state == PIN_REQUIRED or state == READY
+            endSession(false)
+
+endSession(outOfService)
+    state = OUT_OF_SERVICE if outOfService else IDLE
+    card = null
+    account = null
+    attempts = 0
+    // Keep pending until the withdrawal is resolved.
+    try
+        hardware.ejectCard()
+    on ejection error
+        state = OUT_OF_SERVICE""")
 article += '''
 ### CashInventory
 
 Start with the stock we were given at startup. The constructor rejects nonpositive denominations and negative counts. Zero counts are valid: a cassette may be empty. Copy the map so later changes to the caller's configuration cannot change the ATM's stock.
 
 '''
-article += pair(py_methods(['__init__'], 'CashInventory'),
-                'private final Map<Long, Integer> notes;\n\n' + java_block('CashInventory(Map'))
+article += sketch("""CashInventory(initialNotes)
+    for denomination, count in initialNotes
+        require denomination > 0 and count >= 0
+    notes = copy(initialNotes)""")
 article += '''
 **Planning the bundle**
 
@@ -427,7 +490,7 @@ ATM has already checked that the amount is positive and within the withdrawal li
 - A larger-note choice gets stuck: try fewer of those notes.
 - Planning fails: leave every count unchanged.
 
-`plan` sorts the denominations and starts the search. Its helper, `find_bundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed means that choice cannot produce a valid bundle.
+`plan` sorts the denominations and starts the search. Its helper, `findBundle`, receives the next denomination's index and the amount still needed. Reaching zero returns an empty map: we have successfully made the amount and need no more notes. Running out of denominations with money still needed means that choice cannot produce a valid bundle.
 
 As a successful search returns, each level adds its chosen notes to the bundle. The search must distinguish an empty successful bundle from a failed search.
 
@@ -453,16 +516,37 @@ Trying zero is essential. Without that choice, the search would never discover a
 This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.
 
 '''
-article += pair(py_methods(['plan'], 'CashInventory'),
-                java_block('Map<Long, Integer> plan') + '\n\n' + java_block('private Map<Long, Integer> findBundle'))
+article += sketch("""plan(amount)
+    denominations = sort notes' denominations from largest to smallest
+    failed = empty set
+    return findBundle(0, amount)
+
+findBundle(index, remaining)             // helper within this planning call
+    if remaining == 0
+        return empty map
+    if index == denominations.size or (index, remaining) in failed
+        return null
+
+    denomination = denominations[index]
+    limit = min(notes[denomination], floor(remaining / denomination))
+    for count from limit down to 0
+        rest = findBundle(index + 1, remaining - count * denomination)
+        if rest != null
+            if count > 0
+                rest[denomination] = count
+            return rest
+
+    failed.add((index, remaining))
+    return null""")
 article += '''
 **Recording delivery**
 
-`record_dispensed` is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of `{20000: 3}`, it subtracts three from the ₹200 count. Planning alone never calls this method.
+`recordDispensed` is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of `{20000: 3}`, it subtracts three from the ₹200 count. Planning alone never calls this method.
 
 '''
-article += pair(py_methods(['record_dispensed'], 'CashInventory'),
-                java_block('void recordDispensed'))
+article += sketch("""recordDispensed(plan)
+    for denomination, count in plan
+        notes[denomination] -= count""")
 article += '''
 ### BankGateway
 
@@ -471,7 +555,12 @@ The bank interface provides authentication, available-balance inquiry, and hold 
 Each adapter call waits for a result or times out. The bank adapter must not call ATM methods while ATM is waiting for it, because ATM still holds the lock.
 
 '''
-article += pair(py_class('BankGateway'), java_block('public interface BankGateway'))
+article += sketch("""interface BankGateway
+    authenticate(cardId, pin) -> accountId or null
+    availableBalance(accountId) -> amount
+    hold(accountId, amount, operationId) -> boolean
+    capture(operationId)
+    release(operationId)""")
 article += '''
 ### Hardware
 
@@ -480,14 +569,20 @@ The hardware interface handles dispensing and card ejection. `dispense` reports 
 The hardware adapter must also avoid calling ATM methods while ATM holds its lock.
 
 '''
-article += pair(py_class('Hardware'), java_block('public interface Hardware'))
+article += sketch("""interface Hardware
+    dispense(notes) -> ALL, NONE, or UNKNOWN
+    ejectCard()""")
 article += '''
 ### ATMState
 
 ATMState names the four allowed states. ATM owns the rules for moving between them.
 
 '''
-article += pair(py_class('ATMState'), java_block('public enum ATMState'))
+article += sketch("""enum ATMState
+    IDLE
+    PIN_REQUIRED
+    READY
+    OUT_OF_SERVICE""")
 article += '''
 ### Verification
 
@@ -584,7 +679,7 @@ The Java tests use Java 21 or later. The Python implementation works with Python
 
 ### Complete reference implementations
 
-These files contain the complete implementation used in the walkthrough.
+The complete Python and Java implementations below follow the same design and flows as the pseudocode. They include the language-specific details needed to run the solution.
 
 Download [atm.py](atm.py) or [ATM.java](ATM.java).
 
