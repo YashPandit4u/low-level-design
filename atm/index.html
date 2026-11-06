@@ -569,11 +569,63 @@ Out of scope:
 </code></pre></div>
 <p><strong>Planning the bundle</strong></p>
 <p>Let's decide how to choose notes. Suppose the ATM has one ₹500 note and three ₹200 notes. A customer asks for ₹600. Taking ₹500 first gets stuck, but three ₹200 notes work.</p>
-<details class="comparison bad"><summary><span class="comparison-title">Bad Solution: Take the largest note and never reconsider</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>Greedy selection is short, but it rejects that valid ₹600 withdrawal. Checking total cash first does not fix the problem. We need a combination that respects both denominations and counts.</p></div></details>
+<details class="comparison bad"><summary><span class="comparison-title">Bad Solution: Take the largest note and never reconsider</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>Start with the largest denomination. Take as many notes as fit, then move to the next smaller denomination. Once a choice is made, keep it.</p><p>For our ₹600 withdrawal, that means taking the one ₹500 note. We still need ₹100, but the only smaller notes are ₹200. The algorithm returns no plan even though three ₹200 notes would pay the full amount.</p><div class="codebox"><div class="codebar"><span class="code-title">Bad Solution: Take the largest note and never reconsider</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>remaining = 600
+Take one 500 note -&gt; remaining = 100
+Take zero 200 notes -&gt; remaining = 100
+Return no plan
+</code></pre></div><p>The machine has ₹1,100 in total, so a total-cash check passes. The mistake is committing to the ₹500 note without checking whether the remainder can be paid.</p><p>This approach is rated Bad because it rejects a valid withdrawal under our requirements. Choosing larger notes first is fine as a preference. Refusing to reconsider that choice is the problem. A different design with restricted denominations and guaranteed stock might justify greedy selection, but our inventory can run out of individual denominations.</p></div></details>
 
-<details class="comparison good"><summary><span class="comparison-title">Great Solution: Try bounded combinations</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>Try the largest useful count of a denomination, then smaller counts if the remaining amount cannot be made. Each denomination has a fixed stock limit. Remember failed searches so we do not repeat them. This works well for a small set of note denominations and a limited withdrawal amount.</p></div></details>
 
-<details class="comparison neutral"><summary><span class="comparison-title">Good Solution: Build a dynamic programming table</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>A table can record which amounts are reachable and reconstruct a bundle. This can work well when the range of possible amounts is small. We also need to track how many notes of each denomination are available. We do not need it for this walkthrough.</p></div></details>
+
+
+
+<details class="comparison good"><summary><span class="comparison-title">Great Solution: Try note counts and backtrack when a choice fails</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>Keep the preference for larger notes, but make each choice provisional. If smaller denominations cannot pay the remainder, return to the previous choice and try fewer notes. This is backtracking.</p><p>For ₹600, try one ₹500 note first. When the remaining ₹100 cannot be paid, discard that tentative choice and try zero ₹500 notes. We now need the full ₹600 from ₹200 notes. Three are available, so that branch succeeds.</p><div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Try note counts and backtrack when a choice fails</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Choose the number of 500 notes
+    1 note -&gt; need 100 from 200 notes -&gt; fails
+    0 notes -&gt; need 600 from 200 notes
+        3 notes -&gt; need 0 -&gt; success
+
+Chosen bundle = {20000: 3}              // denomination keys are paise
+</code></pre></div><p>How many counts should we try? For each denomination, start with the smaller of its available count and the number that fits into the remaining amount. Count downward to zero. With two ₹500 notes in stock and a ₹600 request, the largest useful count is still one. Trying two would exceed the request.</p><p>The search passes the remaining amount to the next denomination. A remainder of zero means a complete bundle was found. Reaching the end of the denomination list with money still needed means that branch failed.</p><p>These are tentative choices in a plan. They do not remove notes from CashInventory. A failed branch therefore needs no stock rollback. Actual stock changes only after confirmed dispensing.</p><p>Remember failed searches by <code>(denomination index, remaining amount)</code>. If another branch reaches the same pair, the remaining denominations and their counts are identical, so repeating the search cannot help. Keep that cache within one planning call because later withdrawals can change stock.</p><p>This is a Great fit for our walkthrough because it directly expresses the rule we need to teach: try a legal count, solve the remainder, and reconsider on failure. It respects stock limits and finds a bundle whenever one exists. It may explore many failed choices, so the small configured denomination set and withdrawal limit matter. It also does not promise the fewest notes.</p></div></details>
+
+
+
+
+
+
+
+
+<details class="comparison good"><summary><span class="comparison-title">Great Solution: Build the reachable amounts one denomination at a time</span><svg aria-hidden="true" fill="currentColor" focusable="false" viewbox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></summary><div class="comparison-body"><p>Dynamic programming answers the same question from the other direction. Instead of following one candidate bundle until it succeeds or fails, keep the amounts that can be made from the denominations processed so far.</p><p>Start with amount zero, made with no notes. Process the ₹500 cassette, then the ₹200 cassette. Ignore amounts above the ₹600 request. The table below uses rupees to keep the example readable.</p><table>
+<thead>
+<tr>
+<th>Denominations processed</th>
+<th>Reachable amounts up to ₹600</th>
+<th>How they are made</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>None</td>
+<td>0</td>
+<td>No notes</td>
+</tr>
+<tr>
+<td>One ₹500 note</td>
+<td>0, 500</td>
+<td>Use zero or one ₹500 note</td>
+</tr>
+<tr>
+<td>Three ₹200 notes as well</td>
+<td>0, 200, 400, 500, 600</td>
+<td>Add zero to three ₹200 notes to each amount from the previous row</td>
+</tr>
+</tbody>
+</table><p>For the last row, starting from zero produces 0, 200, 400, and 600. Starting from 500 produces only 500 within the target. Adding even one ₹200 note to it would exceed ₹600.</p><p>Each row must be built from the <strong>previous row</strong>. That is how we enforce the count limit. For example, with only two ₹200 notes, adding zero, one, or two notes to the previous row would never produce ₹600. Repeatedly reusing newly added amounts without tracking counts could accidentally spend the same notes again.</p><p>A yes/no table is not enough because Hardware needs the actual bundle. For each newly reachable amount, save the previous amount and how many notes of the current denomination were used. At ₹600, the saved choice points back to zero with three ₹200 notes. Following those choices reconstructs <code>{20000: 3}</code>.</p><p>This is also a Great solution when maintaining the reachable amount range is practical. It makes stock limits and reconstruction explicit, but adds a table and predecessor records to manage. A large amount range can require substantial storage. Backtracking fits this walkthrough more naturally, so we will implement it below. Both approaches can satisfy the same exact-bundle requirement.</p></div></details>
+
+
+
+
+
+
 
 <p><strong>Implementing <code>plan</code></strong></p>
 <p>ATM has already checked that the amount is positive and within the withdrawal limit. The planner only needs to solve the note-selection problem.</p>
@@ -596,7 +648,7 @@ Out of scope:
 <p>The <code>failed</code> set remembers combinations of index and remaining amount that could not work. For example, after proving that the smaller notes cannot make ₹100, another path does not need to repeat that search. This cache belongs to one planning call because stock may change before the next withdrawal.</p>
 <p>Why is the cache key just <code>(index, remaining)</code>? Earlier choices used only larger denominations. They did not change the stock of any denomination still ahead of us. The same index and remainder therefore describe the same remaining problem within this call.</p>
 <p>Walk through our ₹600 example before reading the code:</p>
-<div class="codebox"><div class="codebar"><span class="code-title">Good Solution: Build a dynamic programming table</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Available: one ₹500 note, three ₹200 notes
+<div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Build the reachable amounts one denomination at a time</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>Available: one ₹500 note, three ₹200 notes
 Need: ₹600
 
 Try one ₹500 note -&gt; ₹100 remains
@@ -607,7 +659,7 @@ Return {20000: 3} in paise. Stock is still unchanged.
 </code></pre></div>
 <p>Trying zero is essential. Without that choice, the search would never discover a bundle made entirely from smaller notes.</p>
 <p>This finds a valid bundle with a preference for larger notes. It does not promise the fewest notes for every denomination set.</p>
-<div class="codebox"><div class="codebar"><span class="code-title">Good Solution: Build a dynamic programming table</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>plan(amount)
+<div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Build the reachable amounts one denomination at a time</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>plan(amount)
     denominations = sort notes' denominations from largest to smallest
     failed = empty set
     return findBundle(0, amount)
@@ -632,7 +684,7 @@ findBundle(index, remaining)             // helper within this planning call
 </code></pre></div>
 <p><strong>Recording delivery</strong></p>
 <p><code>recordDispensed</code> is the only method that reduces stock. ATM calls it after the dispenser confirms delivery, using the plan it just created while holding the same lock. For a plan of <code>{20000: 3}</code>, it subtracts three from the ₹200 count. Planning alone never calls this method.</p>
-<div class="codebox"><div class="codebar"><span class="code-title">Good Solution: Build a dynamic programming table</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>recordDispensed(plan)
+<div class="codebox"><div class="codebar"><span class="code-title">Great Solution: Build the reachable amounts one denomination at a time</span><button aria-label="Copy code" class="copy"><svg aria-hidden="true" fill="none" height="15" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="15"><rect height="16" rx="2" width="12" x="7" y="5"></rect><path d="M15 5V3H4v14h3"></path></svg></button></div><pre><code>recordDispensed(plan)
     for denomination, count in plan
         notes[denomination] -= count
 </code></pre></div>

@@ -481,15 +481,66 @@ Let's decide how to choose notes. Suppose the ATM has one ₹500 note and three 
 
 #### Bad Solution: Take the largest note and never reconsider
 
-Greedy selection is short, but it rejects that valid ₹600 withdrawal. Checking total cash first does not fix the problem. We need a combination that respects both denominations and counts.
+Start with the largest denomination. Take as many notes as fit, then move to the next smaller denomination. Once a choice is made, keep it.
 
-#### Great Solution: Try bounded combinations
+For our ₹600 withdrawal, that means taking the one ₹500 note. We still need ₹100, but the only smaller notes are ₹200. The algorithm returns no plan even though three ₹200 notes would pay the full amount.
 
-Try the largest useful count of a denomination, then smaller counts if the remaining amount cannot be made. Each denomination has a fixed stock limit. Remember failed searches so we do not repeat them. This works well for a small set of note denominations and a limited withdrawal amount.
+```text
+remaining = 600
+Take one 500 note -> remaining = 100
+Take zero 200 notes -> remaining = 100
+Return no plan
+```
 
-#### Good Solution: Build a dynamic programming table
+The machine has ₹1,100 in total, so a total-cash check passes. The mistake is committing to the ₹500 note without checking whether the remainder can be paid.
 
-A table can record which amounts are reachable and reconstruct a bundle. This can work well when the range of possible amounts is small. We also need to track how many notes of each denomination are available. We do not need it for this walkthrough.
+This approach is rated Bad because it rejects a valid withdrawal under our requirements. Choosing larger notes first is fine as a preference. Refusing to reconsider that choice is the problem. A different design with restricted denominations and guaranteed stock might justify greedy selection, but our inventory can run out of individual denominations.
+
+#### Great Solution: Try note counts and backtrack when a choice fails
+
+Keep the preference for larger notes, but make each choice provisional. If smaller denominations cannot pay the remainder, return to the previous choice and try fewer notes. This is backtracking.
+
+For ₹600, try one ₹500 note first. When the remaining ₹100 cannot be paid, discard that tentative choice and try zero ₹500 notes. We now need the full ₹600 from ₹200 notes. Three are available, so that branch succeeds.
+
+```text
+Choose the number of 500 notes
+    1 note -> need 100 from 200 notes -> fails
+    0 notes -> need 600 from 200 notes
+        3 notes -> need 0 -> success
+
+Chosen bundle = {20000: 3}              // denomination keys are paise
+```
+
+How many counts should we try? For each denomination, start with the smaller of its available count and the number that fits into the remaining amount. Count downward to zero. With two ₹500 notes in stock and a ₹600 request, the largest useful count is still one. Trying two would exceed the request.
+
+The search passes the remaining amount to the next denomination. A remainder of zero means a complete bundle was found. Reaching the end of the denomination list with money still needed means that branch failed.
+
+These are tentative choices in a plan. They do not remove notes from CashInventory. A failed branch therefore needs no stock rollback. Actual stock changes only after confirmed dispensing.
+
+Remember failed searches by `(denomination index, remaining amount)`. If another branch reaches the same pair, the remaining denominations and their counts are identical, so repeating the search cannot help. Keep that cache within one planning call because later withdrawals can change stock.
+
+This is a Great fit for our walkthrough because it directly expresses the rule we need to teach: try a legal count, solve the remainder, and reconsider on failure. It respects stock limits and finds a bundle whenever one exists. It may explore many failed choices, so the small configured denomination set and withdrawal limit matter. It also does not promise the fewest notes.
+
+#### Great Solution: Build the reachable amounts one denomination at a time
+
+Dynamic programming answers the same question from the other direction. Instead of following one candidate bundle until it succeeds or fails, keep the amounts that can be made from the denominations processed so far.
+
+Start with amount zero, made with no notes. Process the ₹500 cassette, then the ₹200 cassette. Ignore amounts above the ₹600 request. The table below uses rupees to keep the example readable.
+
+| Denominations processed | Reachable amounts up to ₹600 | How they are made |
+| --- | --- | --- |
+| None | 0 | No notes |
+| One ₹500 note | 0, 500 | Use zero or one ₹500 note |
+| Three ₹200 notes as well | 0, 200, 400, 500, 600 | Add zero to three ₹200 notes to each amount from the previous row |
+
+For the last row, starting from zero produces 0, 200, 400, and 600. Starting from 500 produces only 500 within the target. Adding even one ₹200 note to it would exceed ₹600.
+
+Each row must be built from the **previous row**. That is how we enforce the count limit. For example, with only two ₹200 notes, adding zero, one, or two notes to the previous row would never produce ₹600. Repeatedly reusing newly added amounts without tracking counts could accidentally spend the same notes again.
+
+A yes/no table is not enough because Hardware needs the actual bundle. For each newly reachable amount, save the previous amount and how many notes of the current denomination were used. At ₹600, the saved choice points back to zero with three ₹200 notes. Following those choices reconstructs `{20000: 3}`.
+
+This is also a Great solution when maintaining the reachable amount range is practical. It makes stock limits and reconstruction explicit, but adds a table and predecessor records to manage. A large amount range can require substantial storage. Backtracking fits this walkthrough more naturally, so we will implement it below. Both approaches can satisfy the same exact-bundle requirement.
+
 
 **Implementing `plan`**
 
