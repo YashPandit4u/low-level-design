@@ -57,6 +57,26 @@ public final class VendingMachineTest {
         }
     }
 
+    private static void successAndRefundReturnToIdle() {
+        var device = new Device();
+        var vm = machine(device, 2, Map.of());
+        check(vm.cancel());
+        check(vm.buy("A1") == VendingMachine.PurchaseResult.INSUFFICIENT_CREDIT);
+        check(device.calls.isEmpty());
+
+        check(vm.insertCoin(2));
+        check(vm.cancel());
+        check(vm.cancel());
+        check(device.calls.equals(List.of("refund [2]")));
+
+        check(vm.insertCoin(2));
+        check(vm.insertCoin(2));
+        check(vm.buy("A1") == VendingMachine.PurchaseResult.SUCCESS);
+        check(vm.buy("A1") == VendingMachine.PurchaseResult.INSUFFICIENT_CREDIT);
+        check(vm.cancel());
+        check(device.calls.equals(List.of("refund [2]", "product A1", "collect [2, 2]")));
+    }
+
     private static void changeAndCancellation() {
         var device = new Device();
         var vm = machine(device, 2, Map.of(5, 1, 2, 3));
@@ -181,6 +201,7 @@ public final class VendingMachineTest {
     }
 
     public static void main(String[] args) throws Exception {
+        successAndRefundReturnToIdle();
         changeAndCancellation();
         prechecksAndExactPayment();
         deviceFailures();

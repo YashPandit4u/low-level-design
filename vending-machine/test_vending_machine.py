@@ -44,6 +44,26 @@ class VendingMachineTest(unittest.TestCase):
     def machine(self, change=None, quantity=1):
         return VendingMachine({"A1": Slot(4, quantity)}, change or {}, self.hw)
 
+    def test_success_and_refund_return_to_idle(self):
+        vm = self.machine(quantity=2)
+        self.assertTrue(vm.cancel())
+        self.assertEqual(vm.buy("A1"), PurchaseResult.INSUFFICIENT_CREDIT)
+        self.assertEqual(self.hw.calls, [])
+
+        self.assertTrue(vm.insert_coin(2))
+        self.assertTrue(vm.cancel())
+        self.assertTrue(vm.cancel())
+        self.assertEqual(self.hw.calls, [("refund", (2,))])
+
+        self.assertTrue(vm.insert_coin(2))
+        self.assertTrue(vm.insert_coin(2))
+        self.assertEqual(vm.buy("A1"), PurchaseResult.SUCCESS)
+        self.assertEqual(vm.buy("A1"), PurchaseResult.INSUFFICIENT_CREDIT)
+        self.assertTrue(vm.cancel())
+        self.assertEqual(self.hw.calls, [
+            ("refund", (2,)), ("product", "A1"), ("collect", (2, 2))
+        ])
+
     def test_non_greedy_change_is_paid_and_deducted(self):
         vm = self.machine({5: 1, 2: 3}, quantity=2)
         self.assertTrue(vm.insert_coin(10))

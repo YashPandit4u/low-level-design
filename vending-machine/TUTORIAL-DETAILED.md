@@ -4,7 +4,9 @@
 
 A customer inserts coins, chooses an item, and collects the item and any change. The machine also lets the customer cancel and get back the coins they inserted.
 
-The tricky part is what the machine can actually give back. Suppose a snack costs ₹4 and the customer inserts ₹10. The machine owes ₹6. It might have ₹11 in change but still fail to make ₹6 with the coins it has. A balance alone cannot answer that question.
+The same buttons must behave differently as a purchase progresses. Press Cancel before inserting a coin and nothing happens. Press it after inserting ₹10 and the machine owes those coins back. Press it after a refund times out and trying again could pay twice. We will use the State pattern to give each phase its own behavior.
+
+Exact change is a separate problem. Suppose a snack costs ₹4 and the customer inserts ₹10. The machine owes ₹6. It might have ₹11 in change but still fail to make ₹6 with the coins it has. A balance alone cannot answer that question.
 
 ## Requirements
 
@@ -67,7 +69,8 @@ Start with the responsibilities that differ. The machine knows whether the custo
 
 | Type | Responsibility |
 | --- | --- |
-| VendingMachine | Own credit, serialize commands, and coordinate the sale. |
+| VendingMachine | Own credit, slots, hardware, and the current state. Serialize customer commands. |
+| MachineState | Define how customer commands behave in the current phase. |
 | Slot | Hold a price and the number of units in one physical slot. |
 | CoinBank | Plan exact change within the tube counts and deduct confirmed payouts. |
 | Hardware | Report delivery from product dispensing, change payout, and escrow return. |
@@ -88,7 +91,8 @@ The machine needs a slot lookup, one customer's credit, and a way to stop new op
 | Buy from a slot code | Map from code to Slot |
 | Accept and refund a customer's payment | Credit backed by the coins in escrow |
 | Make exact change | One CoinBank for the tube counts |
-| Keep an uncertain sale available for review | PendingPurchase and an out-of-service state |
+| Route commands by phase | Current MachineState object |
+| Keep an uncertain sale available for review | PendingPurchase |
 | Prevent overlapping commands | One lock for the machine |
 
 ```text
@@ -109,15 +113,38 @@ VendingMachine
 
 The controller passes the selected slot code. The machine looks up the price and stock, so the caller cannot supply a cheaper price. For coin insertion, false means the coin should be returned. For cancellation, true means no customer credit remains. False means the refund needs review and the machine has stopped.
 
-Two states are enough. READY allows customer commands. OUT_OF_SERVICE rejects them. Credit distinguishes a session with payment from one without payment. The lock prevents another command from entering while a sale is running.
+### MachineState
 
-#### Good Solution: Put each mode in its own class
+The same command can mean different things at different points in a purchase. Before the first coin, `cancel()` has nothing to return. After the first coin, it must ask hardware to return the escrow. After an uncertain refund, it must reject the command because the coins may already have reached the customer.
 
-A State pattern can help when every mode has its own substantial behavior. Here, the out-of-service behavior is one rule shared by three methods. A class per mode would spread those methods out without removing any purchase logic.
+```text
+interface MachineState
+  + insertCoin(machine: VendingMachine, coin: int) -> boolean
+  + buy(machine: VendingMachine, slotCode: string) -> PurchaseResult
+  + cancel(machine: VendingMachine) -> boolean
+```
 
-#### Great Solution: Keep an enum and check it at each entry point
+#### Good Solution: Keep an enum and branch on it
 
-Use READY and OUT_OF_SERVICE. A failed payout can change the state before releasing the lock, so a cancellation waiting on the lock cannot issue a second payout. This keeps the rule close to each customer command.
+An enum makes the phases easy to name. Each public method would then decide what IDLE, HAS_CREDIT, and OUT_OF_SERVICE mean for that command. With three commands this is workable. To review a new maintenance phase, though, we'd need to read every command and check that each one handles it.
+
+#### Great Solution: Give each state its own behavior
+
+`VendingMachine` is the context. It calls the same methods on its current `MachineState` object. The concrete state performs the action and can replace the current state after an outcome. The caller keeps using the same machine. The credit, slots, and hardware stay on the machine, so switching state preserves those facts.
+
+| Current state | Command or outcome | Next state |
+| --- | --- | --- |
+| IdleState | Accept the first coin into escrow | HasCreditState |
+| IdleState | Reject a coin, attempt to buy, or cancel | IdleState |
+| HasCreditState | Insert more coins or fail a purchase check | HasCreditState |
+| HasCreditState | Hardware confirms the product did not drop | HasCreditState |
+| HasCreditState | Complete the sale or confirm the refund | IdleState |
+| HasCreditState | Product delivery is uncertain, change payout fails, or escrow return fails | OutOfServiceState |
+| OutOfServiceState | Any customer command | OutOfServiceState |
+
+`IdleState` assumes zero credit. `HasCreditState` assumes positive credit and can try a purchase. `OutOfServiceState` blocks customer commands and leaves the record for review. The three classes add code, but each one tells us what every customer command can do in that phase.
+
+We hold the lock until the product and change commands finish or time out. A second command waits and then sees the state left by the first command. We'd add a dispensing state if hardware became asynchronous and customer commands could arrive while a sale was still in progress.
 
 ### Slot
 
@@ -185,13 +212,13 @@ An unknown slot is an invalid request. A valid slot with zero items is a normal 
 
 ## Implementation
 
-Spend most of the interview on `buy` and `CoinBank.plan`. The first shows when we commit each part of the sale. The second shows how stock limits affect exact change. We'll start at the customer-facing machine and work down to its dependencies.
+Start with the three methods the caller uses. Then walk through the state classes, spending most of the time on `HasCreditState.buy` and its change planner.
 
 ### VendingMachine
 
 **Creating the machine**
 
-Validate and copy the configured slots, load the change tubes, and start ready with zero credit. The copy lets us change a slot quantity without editing the caller's configuration.
+Copy the configured slots and load the change tubes. Start in `IdleState` with zero credit and no pending purchase.
 
 ```text
 VendingMachine(slots, change, hardware)
@@ -202,124 +229,208 @@ VendingMachine(slots, change, hardware)
         this.slots[code] = Slot(slot.price, slot.quantity)
     coins = CoinBank(change)
     this.hardware = hardware
-    state = READY
+    state = IdleState()
     credit = 0
     pending = null
     lock = Lock()
 ```
 
-**Inserting a coin**
+**Delegating customer commands**
 
-Check the machine state, denomination, and credit limit before accepting the coin. Place the accepted coin in escrow while holding the same lock that protects credit. A purchase cannot use that credit before the coin is in escrow.
+Acquire the lock before reading the current state. If a cancellation waits behind a purchase that fails, it dispatches to the state the purchase left behind.
 
 ```text
 insertCoin(coin)
     synchronized(this)
-        if state != READY
-            throw Error("Machine is out of service")
-        if coin is unsupported or credit + coin > 1000
-            return false
-        hardware.acceptCoin(coin)
-        credit += coin
-        return true
+        return state.insertCoin(this, coin)
+
+buy(slotCode)
+    synchronized(this)
+        return state.buy(this, slotCode)
+
+cancel()
+    synchronized(this)
+        return state.cancel(this)
+```
+
+**Accepting a coin**
+
+Both customer states use the same acceptance rule. Check the denomination and credit limit, move the coin to escrow, then record its value. The calling state decides whether acceptance changes the phase.
+
+```text
+acceptCoin(coin)
+    if coin is unsupported or credit + coin > 1000
+        return false
+    hardware.acceptCoin(coin)
+    credit += coin
+    return true
+```
+
+Both purchase handlers use the same lookup so an unknown code is an error in either customer state.
+
+```text
+slotFor(slotCode)
+    slot = slots.get(slotCode)
+    if slot == null
+        throw Error("Unknown slot")
+    return slot
+```
+
+### MachineState
+
+The three operations mirror the public machine API. Each one also receives the machine so it can use the shared credit and inventory and update the current state. Callers never receive the state objects.
+
+```text
+interface MachineState
+    insertCoin(machine, coin) -> boolean
+    buy(machine, slotCode) -> PurchaseResult
+    cancel(machine) -> boolean
+```
+
+### IdleState
+
+**Inserting the first coin**
+
+Stay idle if the coin is rejected. After the first coin reaches escrow and credit is recorded, move to `HasCreditState`.
+
+```text
+insertCoin(machine, coin)
+    if machine.acceptCoin(coin) == false
+        return false
+    machine.state = HasCreditState()
+    return true
+```
+
+**Buying without credit**
+
+Look up the slot so the customer still sees sold out for an empty slot. A stocked item requires payment. No hardware call is needed.
+
+```text
+buy(machine, slotCode)
+    slot = machine.slotFor(slotCode)
+    if slot.quantity == 0
+        return SOLD_OUT
+    return INSUFFICIENT_CREDIT
+```
+
+**Cancelling without credit**
+
+No coins are in escrow, so cancellation succeeds without a refund command.
+
+```text
+cancel(machine)
+    return true
+```
+
+### HasCreditState
+
+**Adding credit**
+
+Use the same coin acceptance rule. The customer already has credit, so accepting or rejecting another coin leaves the state in place.
+
+```text
+insertCoin(machine, coin)
+    return machine.acceptCoin(coin)
 ```
 
 **Buying an item**
 
-Say A1 costs ₹4 and the customer inserts ₹10. Before telling the motor to move, find a plan for ₹6. If that fails, the customer can still cancel and get the original ₹10 coin back.
+Say A1 costs ₹4 and the customer inserts ₹10. Before telling the motor to move, find a plan for ₹6. If the tubes cannot make ₹6, leave the machine in `HasCreditState` so the customer can choose another item or cancel.
 
 **Core logic**
 
 1. Find the slot and check its stock and the customer's credit.
-2. Plan the exact change from the tubes.
+2. Plan exact change from the tubes.
 3. Save the pending purchase and ask hardware to dispense the item.
-4. After confirmed product delivery, reduce stock and ask hardware to pay any change.
-5. After confirmed payout, update tube counts, collect escrow, and clear the credit and pending purchase.
+4. After confirmed product delivery, reduce stock and pay any change.
+5. After confirmed payout, update the tube counts, collect escrow, clear credit, and return to `IdleState`.
 
 **Edge cases**
 
-- Unknown slot, sold out, insufficient credit, or no exact change: reject before dispensing.
-- Product definitely did not drop: keep the item count and the customer's credit.
-- Product delivery is uncertain: stop the machine before paying change.
-- Change fails after the product drops: keep the stock decrement, retain the pending record, and stop. Returning all escrow would give the customer both the product and the full payment.
+- Unknown slot, sold out, insufficient credit, or no exact change. Reject before dispensing.
+- Confirmed non-delivery. Keep the item count and credit, then let the customer try again or cancel.
+- Uncertain product delivery. Move to `OutOfServiceState` before paying change.
+- Failed change payout after the product drops. Keep the stock decrement, retain the pending record, and move to `OutOfServiceState`.
 
 #### Bad Solution: Pay change before dispensing the product
 
-Suppose we pay ₹6 first and the motor then jams. We cannot return the original ₹10 as well, because ₹6 has already gone out. We now owe a partial refund and need another payout to resolve a sale in which the customer got no product.
+Suppose we pay ₹6 first and the motor then jams. Returning the original ₹10 would give the customer ₹16 in total. We would owe a separate ₹4 payout to resolve a sale in which the customer got no product.
 
 #### Great Solution: Plan change first, then dispense the item before paying out
 
-Planning rules out avoidable change failures before anything moves. Paying only after confirmed product delivery leaves the original escrow intact if the product definitely did not drop. A payout can still fail, so we record which part of the sale happened and stop if we cannot finish.
-
-**The purchase flow**
-
-The same lock covers the stock check, change plan, and physical commands. A waiting cancel call can run only after this sale reaches a known result or stops the machine.
+Planning checks the tubes before anything moves. Paying change after the item drops leaves the original escrow available if the product definitely did not drop. If the product drops but change fails, the pending record shows that the customer already received the item.
 
 ```text
-buy(slotCode)
-    synchronized(this)
-        if state != READY
-            throw Error("Machine is out of service")
-        slot = slots[slotCode]
-        if slot == null
-            throw Error("Unknown slot")
-        if slot.quantity == 0
-            return SOLD_OUT
-        if credit < slot.price
-            return INSUFFICIENT_CREDIT
+buy(machine, slotCode)
+    slot = machine.slotFor(slotCode)
+    if slot.quantity == 0
+        return SOLD_OUT
+    if machine.credit < slot.price
+        return INSUFFICIENT_CREDIT
 
-        change = coins.plan(credit - slot.price)
-        if change == null
-            return EXACT_CHANGE_UNAVAILABLE
+    change = machine.coins.plan(machine.credit - slot.price)
+    if change == null
+        return EXACT_CHANGE_UNAVAILABLE
 
-        pending = PendingPurchase(slotCode, change)
-        try
-            delivery = hardware.dispenseProduct(slotCode)
-            if delivery == NONE
-                pending = null
-                return NOT_DISPENSED
+    machine.pending = PendingPurchase(slotCode, change)
+    try
+        delivery = machine.hardware.dispenseProduct(slotCode)
+        if delivery == NONE
+            machine.pending = null
+            return NOT_DISPENSED
 
-            if delivery == ALL
-                slot.quantity -= 1
-                pending.productDelivered = true
-                if change is empty or hardware.dispenseChange(copy(change)) == ALL
-                    coins.recordPaid(change)
-                    hardware.collectEscrow()
-                    credit = 0
-                    pending = null
-                    return SUCCESS
-        catch error
-            state = OUT_OF_SERVICE
-            return PENDING_REVIEW
-
-        state = OUT_OF_SERVICE
+        if delivery == ALL
+            slot.quantity -= 1
+            machine.pending.productDelivered = true
+            if change is empty or machine.hardware.dispenseChange(copy(change)) == ALL
+                machine.coins.recordPaid(change)
+                machine.hardware.collectEscrow()
+                machine.credit = 0
+                machine.pending = null
+                machine.state = IdleState()
+                return SUCCESS
+    catch error
+        machine.state = OutOfServiceState()
         return PENDING_REVIEW
+
+    machine.state = OutOfServiceState()
+    return PENDING_REVIEW
 ```
 
-If change is empty, skip the payout. If we lose the payout reply, the customer might have received some or all of the coins. The saved tube counts then represent the last confirmed counts. The machine cannot safely reuse them until it has checked the hardware.
+Exact payment skips the payout. If the payout reply is lost, the customer might have received some or all of the coins. The saved tube counts describe the last confirmed counts and need to be checked before the machine reopens.
 
-**Cancelling**
+**Cancelling with credit**
 
-Return the actual coins in escrow. This works even when the change tubes are empty. If the return fails, keep the credit and stop the machine so a second cancellation cannot repeat an uncertain refund.
+Return the original coins from escrow, even if the change tubes are empty. A confirmed refund clears credit and moves to `IdleState`. Any other result moves to `OutOfServiceState` so a second cancellation cannot repeat an uncertain payout.
 
 ```text
-cancel()
-    synchronized(this)
-        if state != READY
-            throw Error("Machine is out of service")
-        if credit == 0
+cancel(machine)
+    try
+        if machine.hardware.returnEscrow() == ALL
+            machine.credit = 0
+            machine.state = IdleState()
             return true
-
-        try
-            if hardware.returnEscrow() == ALL
-                credit = 0
-                return true
-        catch error
-            state = OUT_OF_SERVICE
-            return false
-
-        state = OUT_OF_SERVICE
+    catch error
+        machine.state = OutOfServiceState()
         return false
+
+    machine.state = OutOfServiceState()
+    return false
+```
+
+### OutOfServiceState
+
+Each customer command fails before touching hardware or changing any data. An operator needs to resolve the fault before reopening the machine.
+
+```text
+insertCoin(machine, coin)
+    throw Error("Machine is out of service")
+
+buy(machine, slotCode)
+    throw Error("Machine is out of service")
+
+cancel(machine)
+    throw Error("Machine is out of service")
 ```
 
 ### Slot
@@ -445,14 +556,6 @@ PendingPurchase(slotCode, change)
     productDelivered = false
 ```
 
-### MachineState
-
-```text
-enum MachineState
-    READY
-    OUT_OF_SERVICE
-```
-
 ### Delivery
 
 ```text
@@ -479,26 +582,27 @@ enum PurchaseResult
 Walk through one sale using the example above. Start with one unit in A1 at ₹4 and a float of one ₹5 coin and three ₹2 coins.
 
 ```text
-insertCoin(10)             -> credit = 10
-buy("A1")
+IdleState.insertCoin(10)   -> credit = 10, switch to HasCreditState
+HasCreditState.buy("A1")
   plan(6)                  -> {2: 3}, counts still unchanged
   dispenseProduct("A1")    -> ALL, A1 quantity becomes 0
   dispenseChange({2: 3})   -> ALL, 2-coin count becomes 0
-  collect escrow and clear credit -> SUCCESS
+  collect escrow and clear credit -> switch to IdleState, return SUCCESS
 ```
 
 Now change only one condition at a time.
 
 | Change | Expected behavior |
 | --- | --- |
-| Only two ₹2 coins are available | EXACT_CHANGE_UNAVAILABLE. No product command. Cancel can still return the ₹10 coin. |
+| Buy from a stocked slot before inserting a coin | IdleState returns INSUFFICIENT_CREDIT. Hardware is untouched. |
+| Only two ₹2 coins are available | EXACT_CHANGE_UNAVAILABLE. Stay in HasCreditState. Cancel can still return the ₹10 coin. |
 | Product returns NONE | NOT_DISPENSED. Keep credit and stock. A later purchase or cancel can proceed. |
-| Product outcome is UNKNOWN | PENDING_REVIEW. Do not issue change or accept another customer command. |
+| Product outcome is UNKNOWN | PENDING_REVIEW. Move to OutOfServiceState before paying change. |
 | Product returns ALL and change times out | PENDING_REVIEW. Record the item as delivered. Do not attempt a full escrow refund. |
 | Escrow return is uncertain | Cancel returns false. Keep credit for review and reject another refund attempt. |
 | Two purchase calls race for the last item | One succeeds. The other sees SOLD_OUT. Only one product command is issued. |
 
-The tests also compare the planner against every bundle for several small inventories. That checks both directions: we never return an impossible plan, and we do not miss a valid one. Run the Java tests with JDK 21 or newer.
+The tests check that after a sale or refund, cancelling again issues no hardware command. They also compare the change planner against every possible bundle for several small inventories. Run the Java tests with JDK 21 or newer.
 
 ```sh
 cd vending-machine
@@ -521,15 +625,7 @@ Download [vending_machine.py](vending_machine.py) or [VendingMachine.java](Vendi
 
 Suppose a technician opens A1 just as a customer buys its last snack. If the technician replaces the count while `buy` is waiting for the motor, the software count could describe neither the old stock nor the newly loaded stock.
 
-Add an operator maintenance flow and a MAINTENANCE state. Enter it under the machine lock only when there is no active credit or unresolved operation. Customer commands check the state before doing any work. While the machine is in maintenance, the operator can set A1's verified quantity and price, then return to READY after the door closes and the hardware checks pass.
-
-```text
-beginMaintenance()
-    synchronized(this)
-        if state != READY or credit != 0
-            throw Error("Finish the current session or resolve the fault first")
-        state = MAINTENANCE
-```
+Add a `MaintenanceState` whose three customer commands reject without touching hardware. Add an operator command to enter it under the machine lock, and allow entry only from `IdleState`. While the machine is in maintenance, the operator can set A1's verified quantity and price. Once the door closes and the hardware checks pass, return to `IdleState`. The customer entry points still delegate through the same interface.
 
 Use verified totals for stock updates. If a technician loads twelve snacks, submitting “A1 has twelve” twice leaves twelve. Adding twelve twice would double count. A faulted machine needs reconciliation before this refill flow can reopen it.
 
@@ -581,7 +677,7 @@ One conservative option is to accept a cart only if the machine can make the ref
 
 ## What is expected at each level?
 
-For an early-career interview, show clear slot and credit ownership, a correct purchase and cancel flow, and a change planner that respects available counts.
+For an early-career interview, show how the machine delegates the same command to different state objects. Trace how the first coin enters escrow and how a successful sale or cancellation returns to idle.
 
 For a mid-level interview, trace the ₹6 counterexample, explain why change is planned before dispensing, and separate confirmed device failures from uncertainty. Show how one lock protects the inventory plan and the customer session.
 
@@ -589,6 +685,8 @@ For a senior interview, walk through a product delivery followed by an uncertain
 
 ## Test your understanding
 
+- Where does the first coin change the current state? Why does a second coin leave the state in place?
+- Which object handles `cancel()` after a refund times out? What would change if hardware replied asynchronously?
 - Why can the tubes contain more than ₹6 and still fail to pay exactly ₹6?
 - Why does each dynamic programming row read only from the previous row?
 - Why does cancelling work even if the change tubes are empty?

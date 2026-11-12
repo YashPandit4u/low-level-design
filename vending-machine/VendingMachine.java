@@ -5,8 +5,6 @@ import java.util.Map;
 public final class VendingMachine {
     private static final int MAX_CREDIT = 1000;
 
-    private enum MachineState { READY, OUT_OF_SERVICE }
-
     public enum Delivery { ALL, NONE, UNKNOWN }
 
     public enum PurchaseResult {
@@ -99,7 +97,7 @@ public final class VendingMachine {
     private final Map<String, Slot> slots = new HashMap<>();
     private final CoinBank coins;
     private final Hardware hardware;
-    private MachineState state = MachineState.READY;
+    private MachineState state = new IdleState();
     private int credit;
     private PendingPurchase pending;
 
@@ -117,62 +115,121 @@ public final class VendingMachine {
     }
 
     public synchronized boolean insertCoin(int coin) {
-        if (state != MachineState.READY) throw new IllegalStateException("Machine is out of service");
+        return state.insertCoin(this, coin);
+    }
+
+    public synchronized PurchaseResult buy(String slotCode) {
+        return state.buy(this, slotCode);
+    }
+
+    public synchronized boolean cancel() {
+        return state.cancel(this);
+    }
+
+    private boolean acceptCoin(int coin) {
         if (!CoinBank.accepts(coin) || credit + coin > MAX_CREDIT) return false;
         hardware.acceptCoin(coin);
         credit += coin;
         return true;
     }
 
-    public synchronized PurchaseResult buy(String slotCode) {
-        if (state != MachineState.READY) throw new IllegalStateException("Machine is out of service");
+    private Slot slotFor(String slotCode) {
         Slot slot = slots.get(slotCode);
         if (slot == null) throw new IllegalArgumentException("Unknown slot");
-        if (slot.quantity == 0) return PurchaseResult.SOLD_OUT;
-        if (credit < slot.price) return PurchaseResult.INSUFFICIENT_CREDIT;
-
-        Map<Integer, Integer> change = coins.plan(credit - slot.price);
-        if (change == null) return PurchaseResult.EXACT_CHANGE_UNAVAILABLE;
-
-        pending = new PendingPurchase(slotCode, change);
-        try {
-            Delivery delivery = hardware.dispenseProduct(slotCode);
-            if (delivery == Delivery.NONE) {
-                pending = null;
-                return PurchaseResult.NOT_DISPENSED;
-            }
-            if (delivery == Delivery.ALL) {
-                slot.quantity--;
-                pending.productDelivered = true;
-                if (change.isEmpty() || hardware.dispenseChange(Map.copyOf(change)) == Delivery.ALL) {
-                    coins.recordPaid(change);
-                    hardware.collectEscrow();
-                    credit = 0;
-                    pending = null;
-                    return PurchaseResult.SUCCESS;
-                }
-            }
-        } catch (RuntimeException failure) {
-            state = MachineState.OUT_OF_SERVICE;
-            return PurchaseResult.PENDING_REVIEW;
-        }
-        state = MachineState.OUT_OF_SERVICE;
-        return PurchaseResult.PENDING_REVIEW;
+        return slot;
     }
 
-    public synchronized boolean cancel() {
-        if (state != MachineState.READY) throw new IllegalStateException("Machine is out of service");
-        if (credit == 0) return true;
-        try {
-            if (hardware.returnEscrow() == Delivery.ALL) {
-                credit = 0;
-                return true;
+    private interface MachineState {
+        boolean insertCoin(VendingMachine machine, int coin);
+        PurchaseResult buy(VendingMachine machine, String slotCode);
+        boolean cancel(VendingMachine machine);
+    }
+
+    private static final class IdleState implements MachineState {
+        public boolean insertCoin(VendingMachine machine, int coin) {
+            if (!machine.acceptCoin(coin)) return false;
+            machine.state = new HasCreditState();
+            return true;
+        }
+
+        public PurchaseResult buy(VendingMachine machine, String slotCode) {
+            Slot slot = machine.slotFor(slotCode);
+            if (slot.quantity == 0) return PurchaseResult.SOLD_OUT;
+            return PurchaseResult.INSUFFICIENT_CREDIT;
+        }
+
+        public boolean cancel(VendingMachine machine) {
+            return true;
+        }
+    }
+
+    private static final class HasCreditState implements MachineState {
+        public boolean insertCoin(VendingMachine machine, int coin) {
+            return machine.acceptCoin(coin);
+        }
+
+        public PurchaseResult buy(VendingMachine machine, String slotCode) {
+            Slot slot = machine.slotFor(slotCode);
+            if (slot.quantity == 0) return PurchaseResult.SOLD_OUT;
+            if (machine.credit < slot.price) return PurchaseResult.INSUFFICIENT_CREDIT;
+
+            Map<Integer, Integer> change = machine.coins.plan(machine.credit - slot.price);
+            if (change == null) return PurchaseResult.EXACT_CHANGE_UNAVAILABLE;
+
+            machine.pending = new PendingPurchase(slotCode, change);
+            try {
+                Delivery delivery = machine.hardware.dispenseProduct(slotCode);
+                if (delivery == Delivery.NONE) {
+                    machine.pending = null;
+                    return PurchaseResult.NOT_DISPENSED;
+                }
+                if (delivery == Delivery.ALL) {
+                    slot.quantity--;
+                    machine.pending.productDelivered = true;
+                    if (change.isEmpty() || machine.hardware.dispenseChange(Map.copyOf(change)) == Delivery.ALL) {
+                        machine.coins.recordPaid(change);
+                        machine.hardware.collectEscrow();
+                        machine.credit = 0;
+                        machine.pending = null;
+                        machine.state = new IdleState();
+                        return PurchaseResult.SUCCESS;
+                    }
+                }
+            } catch (RuntimeException failure) {
+                machine.state = new OutOfServiceState();
+                return PurchaseResult.PENDING_REVIEW;
             }
-        } catch (RuntimeException failure) {
-            state = MachineState.OUT_OF_SERVICE;
+            machine.state = new OutOfServiceState();
+            return PurchaseResult.PENDING_REVIEW;
+        }
+
+        public boolean cancel(VendingMachine machine) {
+            try {
+                if (machine.hardware.returnEscrow() == Delivery.ALL) {
+                    machine.credit = 0;
+                    machine.state = new IdleState();
+                    return true;
+                }
+            } catch (RuntimeException failure) {
+                machine.state = new OutOfServiceState();
+                return false;
+            }
+            machine.state = new OutOfServiceState();
             return false;
         }
-        state = MachineState.OUT_OF_SERVICE;
-        return false;
+    }
+
+    private static final class OutOfServiceState implements MachineState {
+        public boolean insertCoin(VendingMachine machine, int coin) {
+            throw new IllegalStateException("Machine is out of service");
+        }
+
+        public PurchaseResult buy(VendingMachine machine, String slotCode) {
+            throw new IllegalStateException("Machine is out of service");
+        }
+
+        public boolean cancel(VendingMachine machine) {
+            throw new IllegalStateException("Machine is out of service");
+        }
     }
 }
