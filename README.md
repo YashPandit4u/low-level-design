@@ -35,3 +35,7 @@ The reading interface was inspired by Hello Interview. This is an independent st
 ## ATM
 
 [Read the ATM article](https://yashpandit4u.github.io/low-level-design/atm/) · [Source and tests](atm/)
+
+## Vending Machine
+
+[Read the Vending Machine article](https://yashpandit4u.github.io/low-level-design/vending-machine/) · [Source and tests](vending-machine/)
